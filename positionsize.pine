@@ -1,0 +1,227 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+
+//@version=5
+indicator("Buz - Position Size Calculator", "Buz - Scalp Size", overlay=true)
+//v26 - added dynamic entry line 
+//v33 - new way of doing entry line
+//v34 - works - renamed
+//v35 - removed all dca/ multiple tps for now
+//v51 - added rr calcs - lots of minor adjustments - added Breakout fees
+//new - gpt addition of fixed vs floating entry
+
+grp1 = '-------  Price Points  -------'
+
+// Add TP default option
+use_rr3_tp = input.bool(false, title="Use RR3 as Default Take Profit", group=grp1, tooltip="When enabled, if TP is 0, it will use RR3 level as take profit")
+
+risk_amount = input.float(50, title = "Risk Amount in $", group=grp1, confirm = true, tooltip = "Risk per trade")
+
+entry_price_dynamic = close
+fixed_entry_toggle = input.bool(false, title="Use Fixed Entry Price", group=grp1)
+fixed_entry_price = input.price(0, title="Fixed Entry Price", group=grp1, confirm=true, tooltip="Set a fixed entry price if toggled")
+entry_price = fixed_entry_toggle ? fixed_entry_price : entry_price_dynamic
+
+sl_price    = input.price(0, title='Stop Loss', group=grp1, confirm = true)
+tp1_Price = input.price(0, title='Take Profit', group=grp1, confirm = true)
+
+grp2 = '-------  RR Levels  -------'
+
+// Add RR line toggles with custom ratios
+show_rr1 = input.bool(true, title="Show R:R Line 1", group=grp2)
+rr1_ratio = input.float(1.0, title="R:R Ratio 1", minval=0.1, step=0.1, group=grp2)
+rr1_color = input.color(color.new(#ffd700, 0), "Line 1 Color", group=grp2)
+
+show_rr2 = input.bool(true, title="Show R:R Line 2", group=grp2)
+rr2_ratio = input.float(2.0, title="R:R Ratio 2", minval=0.1, step=0.1, group=grp2)
+rr2_color = input.color(color.new(#ffd700, 20), "Line 2 Color", group=grp2)
+
+show_rr3 = input.bool(true, title="Show R:R Line 3", group=grp2)
+rr3_ratio = input.float(5.0, title="R:R Ratio 3", minval=0.1, step=0.1, group=grp2)
+rr3_color = input.color(color.new(#ffd700, 40), "Line 3 Color", group=grp2)
+
+// Line and Label Settings
+grp3 = '-------  Line Settings  -------'
+label_offset = input.int(70, "Label Offset", minval=1, group=grp3)
+line_length = input.int(20, "Line Length", minval=1, group=grp3)
+extend_lines = input.bool(false, title="Extend Lines Right", group=grp3)
+
+table_location_input = input.string("Top Right", title="Location", options=["Bottom Right", "Bottom Left", "Bottom Center", "Top Left", "Top Center", "Top Right", "Middle left", "Middle Center", "Middle Right" ], group='Table Settings')
+
+size = input.string(size.small, title='Text Size', options=[size.normal, size.small, size.tiny])
+
+// Fee platform selection
+fee_platform = input.string("Breakout", title="Fee Platform", group="---Fees---", options=["Breakout", "Edgex", "Blofin"])
+entry_type = input.string("Market", title = "Type of entry", group = "---Fees---", confirm = true, options = ["Limit", "Market"])
+
+extend = input(false, title='Extend Lines')
+
+draw_level(x, txt, col) =>
+    if barstate.islast
+        var line l = line.new(bar_index, x, bar_index+1, x, extend=extend_lines ? extend.right : extend.none, color=col)
+        var label lbl = label.new(bar_index, x, color=color.rgb(131, 105, 245), textcolor=col, textalign=text.align_left, style=label.style_none, text=txt + ' (' + str.tostring(x, "#.##") + ')')
+        
+        // Update position of line and label
+        line.set_xy1(l, bar_index, x)
+        line.set_xy2(l, bar_index + line_length, x)
+        label.set_x(lbl, bar_index + label_offset)
+        label.set_y(lbl, x)
+        
+        line.set_extend(l, extend_lines ? extend.right : extend.none)
+
+draw_level2(x, txt, col) =>
+    if barstate.islast
+        var L = line.new(bar_index, x, bar_index+1, x, extend=extend_lines ? extend.right : extend.none, color=col, style=line.style_dashed)
+        var LBL = label.new(bar_index, x, color=color.rgb(131, 105, 245), textcolor=col, textalign=text.align_left, style=label.style_none, text=txt + ' (' + str.tostring(x, "#.##") + ')')
+        
+        // Update position of line and label for dynamic prices
+        line.set_xy1(L, bar_index, x)
+        line.set_xy2(L, bar_index + line_length, x)
+        label.set_x(LBL, bar_index + label_offset)
+        label.set_y(LBL, x)
+        
+        line.set_extend(L, extend_lines ? extend.right : extend.none)
+
+draw_level(entry_price, 'Entry', color.rgb(131, 105, 245))
+draw_level(sl_price   , 'Stop Loss', #e91e63)
+draw_level(tp1_Price  , 'Take Profit', #00e676)
+
+// RISK
+entry_price := entry_price
+
+var float qty = na // Declare qty here
+var float riskPerContract = na // Declare riskPerContract here.
+
+riskPerContract := math.abs(entry_price - sl_price)
+qty := math.round(risk_amount / (riskPerContract), 4)
+entryMargin = qty * entry_price
+
+// Calculate fees based on platform selection
+var float maker_fee = 0.0
+var float taker_fee = 0.0
+
+if fee_platform == "Breakout"
+    maker_fee := 0.035
+    taker_fee := 0.035
+else if fee_platform == "Edgex"
+    maker_fee := 0.015
+    taker_fee := 0.038
+else if fee_platform == "Blofin"
+    maker_fee := 0.0200
+    taker_fee := 0.0600
+
+// Apply fees on both entry and exit
+entry_fees = entry_type == "Limit" ? (maker_fee/100) * entryMargin : (taker_fee/100) * entryMargin
+exit_fees = (taker_fee/100) * entryMargin  // Exit is always taker fee
+total_fees = entry_fees + exit_fees
+
+// Calculate total loss (risk amount + fees)
+total_loss = risk_amount + total_fees
+
+SL_value = math.abs(entry_price-sl_price)
+
+// Calculate RR price levels
+risk_distance = math.abs(entry_price - sl_price)
+rr1_price = entry_price > sl_price ? entry_price + (risk_distance * rr1_ratio) : entry_price - (risk_distance * rr1_ratio)
+rr2_price = entry_price > sl_price ? entry_price + (risk_distance * rr2_ratio) : entry_price - (risk_distance * rr2_ratio)
+rr3_price = entry_price > sl_price ? entry_price + (risk_distance * rr3_ratio) : entry_price - (risk_distance * rr3_ratio)
+
+// Use RR3 as TP if enabled and TP is 0
+tp_to_use = use_rr3_tp and tp1_Price == 0 ? rr3_price : tp1_Price
+
+// Calculate profit values (fees already included in total_fees)
+tp1_val = math.abs(tp_to_use - entry_price) * qty - total_fees
+tp_val = tp1_val
+rr = tp_val / risk_amount
+
+// Draw RR lines if enabled
+if show_rr1
+    draw_level2(rr1_price, str.tostring(rr1_ratio) + ':1 R:R', rr1_color)
+if show_rr2
+    draw_level2(rr2_price, str.tostring(rr2_ratio) + ':1 R:R', rr2_color)
+if show_rr3
+    draw_level2(rr3_price, str.tostring(rr3_ratio) + ':1 R:R', rr3_color)
+
+// Draw main price levels
+draw_level(entry_price, 'Entry', color.rgb(131, 105, 245))
+draw_level(sl_price, 'Stop Loss', #e91e63)
+draw_level(tp_to_use, 'Take Profit', #00e676)
+
+// Plot Entry, Stop Loss, and Take Profit levels
+var line entry_line = na
+var line sl_line = na
+var line tp_line = na
+var label rr_label = na
+
+if barstate.islast
+    line.delete(entry_line)
+    line.delete(sl_line)
+    line.delete(tp_line)
+    label.delete(rr_label)  // Delete previous label
+    
+    entry_line := line.new(bar_index, entry_price, bar_index + 20, entry_price, color=color.blue, width=2)
+    sl_line := line.new(bar_index, sl_price, bar_index + 20, sl_price, color=color.red, width=2)
+    tp_line := line.new(bar_index, tp_to_use, bar_index + 20, tp_to_use, color=color.green, width=2)
+    
+    rr_label := label.new(bar_index + 20, entry_price, "RR: " + str.tostring(rr, "#.##"), color=color.new(color.blue, 0), textcolor=color.white, style=label.style_label_left)
+
+    // Fill areas between lines
+    linefill.new(entry_line, tp_line, color.new(color.green, 50))
+    linefill.new(entry_line, sl_line, color.new(color.red, 50))
+
+// TABLE
+string table_location = switch table_location_input
+    "Bottom Right"  => position.bottom_right  
+    "Top Left"      => position.top_left  
+    "Top Center"    => position.top_center  
+    "Top Right"     => position.top_right 
+    "Middle left"   => position.middle_left  
+    "Middle Center" => position.middle_center  
+    "Middle Right"  => position.middle_right  
+    "Bottom Left"   => position.bottom_left  
+    "Bottom Center" => position.bottom_center  
+    => position.bottom_right
+
+table_color       = color.new(#07071f, 5 )
+table_borderColor = color.new(#d1d1d1, 34)
+
+var table dashboard = table.new(table_location, rows=17, columns=16, bgcolor=table_color , frame_color=color.gray, frame_width=2, border_color=table_borderColor, border_width = 0)
+
+table.cell(dashboard, text_size=size, column=1, row=3, text_color=#ffffff, text_halign=text.align_left, text="Risk Amount: $" + str.tostring(risk_amount, "#.##") + ' 💵')
+table.cell(dashboard, text_size=size, column=2, row=3, text_color=#ffffff, text_halign=text.align_left, text="Qty: " + str.tostring(qty, "#.#####"))
+table.cell(dashboard, text_size=size, column=1, row=4, text_color=#ffffff, text_halign=text.align_left, text='Entry: ')
+table.cell(dashboard, text_size=size, column=1, row=5, text_color=#e91e63, text_halign=text.align_left, text='Stop Loss: ')
+table.cell(dashboard, text_size=size, column=1, row=6, text_color=#e91e63, text_halign=text.align_left, text='R:R: ')
+table.cell(dashboard, text_size=size, column=1, row=7, text_color=#8f20ff, text_halign=text.align_left, text='Total Fees: ')
+table.cell(dashboard, text_size=size, column=1, row=8, text_color=#ff5722, text_halign=text.align_left, text='Total Loss: ')
+
+table.cell(dashboard, text_size=size, column=2, row=4, text_color=#ffffff, text_halign=text.align_left, text="$" + str.tostring(entry_price, "#.###"))
+table.cell(dashboard, text_size=size, column=2, row=5, text_color=#ffffff, text_halign=text.align_left, text="$" + str.tostring(sl_price, "#.###"))
+table.cell(dashboard, text_size=size, column=2, row=6, text_color=#ffffff, text_halign=text.align_left, text= str.tostring(rr, "#.##") + "r")
+table.cell(dashboard, text_size=size, column=2, row=7, text_color=#ffffff, text_halign=text.align_left, text="$" + str.tostring(total_fees, "#.###"))
+table.cell(dashboard, text_size=size, column=2, row=8, text_color=#ff5722, text_halign=text.align_left, text="$" + str.tostring(total_loss, "#.##"))
+
+table.cell(dashboard, text_size=size, column=1, row=9, text_color=#ffffff, text_halign=text.align_center, text='──────────────')
+table.cell(dashboard, text_size=size, column=2, row=9, text_color=#ffffff, text_halign=text.align_center, text='──────────────')
+table.cell(dashboard, text_size=size, column=1, row=10, text_color=#ffffff, text_halign=text.align_left, text='TP Orders: ')
+table.cell(dashboard, text_size=size, column=2, row=10, text_color=#ffffff, text_halign=text.align_left, text='Profit (Total)')
+
+// Update TP display in table
+table.cell(dashboard, text_size=size, column=1, row=11, text_color=#ffffff, text_halign=text.align_left, text="TP1 - $" + str.tostring(tp_to_use, "#.###"))
+table.cell(dashboard, text_size=size, column=2, row=11, text_color=#ffffff, text_halign=text.align_left, text='+$' + str.tostring(tp1_val, "#.##"))
+
+table.cell(dashboard, text_size=size, column=1, row=12, text_color=#ffffff, text_halign=text.align_center, text='──────────────')
+table.cell(dashboard, text_size=size, column=2, row=12, text_color=#ffffff, text_halign=text.align_center, text='──────────────')
+
+// Add RR price levels to table
+if show_rr1
+    table.cell(dashboard, text_size=size, column=1, row=13, text_color=rr1_color, text_halign=text.align_left, text=str.tostring(rr1_ratio) + ":1 R:R Price:")
+    table.cell(dashboard, text_size=size, column=2, row=13, text_color=rr1_color, text_halign=text.align_left, text="$" + str.tostring(rr1_price, "#.###"))
+if show_rr2
+    table.cell(dashboard, text_size=size, column=1, row=14, text_color=rr2_color, text_halign=text.align_left, text=str.tostring(rr2_ratio) + ":1 R:R Price:")
+    table.cell(dashboard, text_size=size, column=2, row=14, text_color=rr2_color, text_halign=text.align_left, text="$" + str.tostring(rr2_price, "#.###"))
+if show_rr3
+    table.cell(dashboard, text_size=size, column=1, row=15, text_color=rr3_color, text_halign=text.align_left, text=str.tostring(rr3_ratio) + ":1 R:R Price:")
+    table.cell(dashboard, text_size=size, column=2, row=15, text_color=rr3_color, text_halign=text.align_left, text="$" + str.tostring(rr3_price, "#.###"))
+
+// Move total to the last row
+table.cell(dashboard, text_size=size, column=2, row=16, text_color=#ffffff, text_halign=text.align_left, text='Total: $' + str.tostring(tp_val, '#.##') + ' 💵')
