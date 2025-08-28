@@ -1,0 +1,291 @@
+//@version=5
+indicator("ZG Trend", shorttitle="ZG", overlay=true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
+//Made by Buz
+
+colorScheme = input.string("Dark", title = "Dark vs Light Mode", options = ["Dark", "Light"])
+showTCEmas = input(true, title="Show HTF EMAs", group="---Lines---")
+show_Smas = input(true, title="Show SMAs", group="---Lines---")
+show_Trend = input(true, title="Show Trend", group="---Lines---")
+show_HTFTrend1 = input(false, title="Show HTF Trend 1", group="---HTF Lines---")
+show_HTFTrend2 = input(false, title="Show HTF Trend 2", group="---HTF Lines---")
+HTFTimeframe = input.string("240", title = "HTF Trend 1", options = ["1","3","6","15","30","60","240","720"], group="---HTF Lines---", tooltip = "Choose your higher timeframe")
+show_HTFFill = input(false, title="Show HTF Fill", group="---HTF Lines---")
+show_4hr200 = input(true, title="Show 4hr 200EMA", group="---HTF Lines---")
+show_1hr100 = input(true, title="Show 1hr 100MA", group="---HTF Lines---")
+show_DailyTrend = input(false, title="Show Daily Trend", group="---HTF Lines---")
+show_Daily200 = input(false, title="Show Daily 200EMA", group="---HTF Lines---")
+showEMAFill = input(false, title="Show EMA Fill", group = "---Fills---")
+showTrendFill = input(false, title="Show Trend Fill", group = "---Fills---")
+showSMAFill = input(false, title="Show SMA Fill", group = "---Fills---")
+showLabels = input(true, title="Show labels", group = "---Labels---")
+
+showEMA1 = input(true, title="Show EMA 13", group = "---EMAs---", inline = "1")
+showEMA2 = input(true, title="Show EMA 25", group = "---EMAs---", inline = "1")
+showEMA3 = input(true, title="Show EMA 32", group = "---EMAs---", inline = "2")
+showEMA4 = input(true, title="Show EMA 200", group = "---EMAs---", inline = "2")
+showEMA5 = input(false, title="Show EMA 300", group = "---EMAs---", inline = "3")
+showEMA6 = input(false, title="Show EMA 500", group = "---EMAs---", inline = "3")
+showSMA1 = input(false, title="Show SMA 50", group = "---SMAs---", inline = "3")
+showSMA2 = input(true, title="Show SMA 100", group = "---SMAs---", inline = "3")
+showSMA3 = input(false, title="Show SMA 200", group = "---SMAs---", inline = "4")
+showSMA4 = input(false, title="Show SMA 300", group = "---SMAs---", inline = "4")
+
+l1 = input.int(13, "EMA 1", group = "----- EMAs -----")
+l2 = input.int(25, "EMA 2", group = "----- EMAs -----")
+l3 = input.int(32, "EMA 3", group = "----- EMAs -----")
+l4 = input.int(200, "EMA 4", group = "----- EMAs -----")
+l9 = input.int(300, "EMA 5", group = "----- EMAs -----")
+l10 = input.int(500, "EMA 6", group = "----- EMAs -----")
+l5 = input.int(50, "SMA 1", group = "----- SMAs -----")
+l6 = input.int(100, "SMA 2", group = "----- SMAs -----")
+l7 = input.int(200, "SMA 3", group = "----- SMAs -----")
+l8 = input.int(300, "SMA 4", group = "----- SMAs -----")
+
+// EMAs and SMA
+ema1x = ta.ema(close, l1)
+ema2x = ta.ema(close, l2)
+ema3x = ta.ema(close, l3)
+ema4x = ta.ema(close, l4)
+ema5x = ta.ema(close, l9)
+ema6x = ta.ema(close, l10)
+
+sma1x = ta.sma(close, l5)
+sma2x = ta.sma(close, l6)
+sma3x = ta.sma(close, l7)
+sma4x = ta.sma(close, l8)
+
+//////////////////////////////////////////////////////////////////////////
+//
+//
+//                     Plotting EMAs/SMA
+//
+//
+//////////////////////////////////////////////////////////////////////////
+
+
+// Plotting RSI, EMAs, SMA based on user input
+var label Ema1Label = na
+var label Ema2Label = na
+var label Ema3Label = na
+var label Ema4Label = na
+var label Ema5Label = na
+var label Ema6Label = na
+var label Sma1Label = na
+var label Sma2Label = na
+var label Sma3Label = na
+var label Sma4Label = na
+
+//Colour Scheme
+color labelcolour = colorScheme == "Dark" ? color.rgb(253, 253, 253, 40) : color.rgb(19, 10, 150, 40)
+    
+// Plotting TC EMAs
+plot(show_Trend and showEMA1 ? ema1x : na, title="EMA 13", color=#5aee20, linewidth=1, style=plot.style_stepline)
+plot(show_Trend and showEMA2 ? ema2x : na, title="EMA 25", color=color.new(#1384e1, 0), linewidth=1, style=plot.style_stepline)
+plot(show_Trend and showEMA3 ? ema3x : na, title="EMA 32", color=color.new(#ea4e2fef, 0), linewidth=1, style=plot.style_stepline)
+plot(showTCEmas and showEMA4 ? ema4x : na, title="EMA 200", color=#fafafa, linewidth=1, style=plot.style_stepline)
+plot(showTCEmas and showEMA5 ? ema5x : na, title="EMA 300", color=#ff9500, linewidth=1, style=plot.style_stepline)
+plot(showTCEmas and showEMA6 ? ema6x : na, title="EMA 500", color=#9c27b0, linewidth=1, style=plot.style_stepline)
+if barstate.islast
+    // Delete previous labels
+    if (not na(Ema1Label))
+        label.delete(Ema1Label)
+    if (not na(Ema2Label))
+        label.delete(Ema2Label)
+    if (not na(Ema3Label))
+        label.delete(Ema3Label)
+    if (not na(Ema4Label))
+        label.delete(Ema4Label)
+    if (not na(Ema5Label))
+        label.delete(Ema5Label)
+    if (not na(Ema6Label))
+        label.delete(Ema6Label)
+    ///
+    if show_Trend and showEMA1 and showLabels
+        Ema1Label := label.new(x=bar_index, y=ema1x, text= "EMA" + str.tostring(l1), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+    if show_Trend and showEMA2 and showLabels
+        Ema2Label := label.new(x=bar_index, y=ema2x, text="EMA" + str.tostring(l2), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+    if show_Trend and showEMA3 and showLabels
+        Ema3Label := label.new(x=bar_index, y=ema3x, text="EMA" + str.tostring(l3), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+    if showTCEmas and showEMA4 and showLabels
+        Ema4Label := label.new(x=bar_index, y=ema4x, text="EMA" + str.tostring(l4), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+    if showTCEmas and showEMA5 and showLabels
+        Ema5Label := label.new(x=bar_index, y=ema5x, text="EMA" + str.tostring(l9), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+    if showTCEmas and showEMA6 and showLabels
+        Ema6Label := label.new(x=bar_index, y=ema6x, text="EMA" + str.tostring(l10), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+
+// Plotting SMAs.
+plot(show_Smas and showSMA1 ? sma1x : na, color=color.rgb(247, 135, 135, 29), title = "MA 50")
+plot(show_Smas and showSMA2 ? sma2x : na, title="MA 100", color=#000000, linewidth=1, style=plot.style_circles)
+plot(show_Smas and showSMA3 ? sma3x : na, color=color.rgb(176, 39, 39), linewidth=2, title = "MA 200")
+plot(show_Smas and showSMA4 ? sma4x : na, color=color.rgb(13, 151, 25), linewidth=2, title = "MA 300")
+if barstate.islast
+    // Delete previous labels
+    if (not na(Sma1Label))
+        label.delete(Sma1Label)
+    if (not na(Sma2Label))
+        label.delete(Sma2Label)
+    if (not na(Sma3Label))
+        label.delete(Sma3Label)
+    if (not na(Sma4Label))
+        label.delete(Sma4Label)
+    ///
+    if show_Smas and showSMA1 and showLabels
+        Sma1Label := label.new(x=bar_index, y=sma1x, text="<----------MA" + str.tostring(l5), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+    if show_Smas and showSMA2 and showLabels  
+        Sma2Label := label.new(x=bar_index, y=sma2x, text="<----------MA" + str.tostring(l6), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+    if show_Smas and showSMA3 and showLabels
+        Sma3Label := label.new(x=bar_index, y=sma3x, text="<----------MA" + str.tostring(l7), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+    if show_Smas and showSMA4 and showLabels
+        Sma4Label := label.new(x=bar_index, y=sma4x, text="<----------MA" + str.tostring(l8), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+
+// Check EMA order for downtrend.
+isEMADownTrend = ema1x < ema2x and ema2x < ema3x and ema3x < ema4x
+isEMAUpTrend = ema1x > ema2x and ema2x > ema3x and ema3x > ema4x
+
+isSMADownTrend = sma2x < sma3x and sma3x < sma4x
+isSMAUpTrend = sma2x > sma3x and sma3x > sma4x
+
+isDownTrend = ema1x < ema2x and ema2x < ema3x
+isUpTrend = ema1x > ema2x and ema2x > ema3x
+
+trendUpPrice = close > ema1x
+trendDownPrice = close < ema1x
+
+trendStatus = if isUpTrend and trendUpPrice
+    "Uptrend"
+else
+    if isDownTrend and trendDownPrice
+        "Downtrend"
+    else
+        "Sideways"
+
+// Function to determine trend
+getTrendStatusX(price, ema1x, ema2x) =>
+    if price > ema2x and ema1x > ema2x
+        "Up"
+    else if price < ema2x and ema1x < ema2x
+        "Down"
+    else
+        "Neutral"
+
+// Function to determine SMA trend
+getSMATrendX(sma2x, sma3x, sma4x) =>
+    if sma2x > sma3x and sma3x > sma4x
+        "Up"
+    else if sma2x < sma3x and sma3x < sma4x
+        "Down"
+    else
+        "Neutral"
+
+// Function to calculate distance in percentage
+getDistancePercentageX(current, reference) =>
+    (current - reference) / reference * 100
+
+// Check for full alignment
+fullAlignment = if isEMAUpTrend and isSMAUpTrend
+    "Up"
+else if isEMADownTrend and isSMADownTrend
+    "Down"
+else
+    "Neutral"
+
+// Fill between 20 and 200 EMAs based on conditions
+p1 = plot(showTCEmas ? ema1x : na, color=color.rgb(33, 149, 243, 100), title = "Fill EMA 1")
+p2 = plot(showTCEmas ? ema4x : na, color=color.rgb(76, 175, 79, 100), title = "Fill EMA 4")
+fill(p1, p2, color= isEMAUpTrend and showEMAFill ? color.new(color.green, 60) : na, title="Bullish Zone")
+fill(p1, p2, color= isEMADownTrend and showEMAFill ? color.new(color.red, 60) : na, title="Bearish Zone")
+
+// Fill between 20 and 200 EMAs based on conditions
+p5 = plot(show_Trend ? ema1x : na, color=color.rgb(33, 149, 243, 100), title = "Fill Trend EMA 1")
+p6 = plot(show_Trend ? ema3x : na, color=color.rgb(76, 175, 79, 100), title = "Fill Trend EMA 2")
+fill(p5, p6, color= isUpTrend and showTrendFill ? color.new(color.green, 60) : na, title="Bullish Zone")
+fill(p5, p6, color= isDownTrend and showTrendFill ? color.new(color.red, 60) : na, title="Bearish Zone")
+
+// Fill between 20 and 200 EMAs based on conditions
+p3 = plot(show_Smas ? sma2x : na, color=color.rgb(33, 149, 243, 100), title = "Fill SMA 2")
+p4 = plot(show_Smas ? sma4x : na, color=color.rgb(76, 175, 79, 100), title = "Fill SMA 4")
+fill(p3, p4, color= isSMAUpTrend and showSMAFill ? color.new(#cb1df2, 70) : na, title="Bullish Zone")
+fill(p3, p4, color= isSMADownTrend and showSMAFill ? color.new(#f5ba0b, 70) : na, title="Bearish Zone")
+
+emaHTFTrend1 = request.security(syminfo.tickerid, HTFTimeframe, ta.ema(close, l1))
+plot(show_HTFTrend1 ? emaHTFTrend1 : na, "4hr Trend", color=color.rgb(25, 116, 3, 15), style=plot.style_cross, linewidth = 2)
+var label HTFTrendLabel = na
+if barstate.islast
+    // Delete previous labels
+    if (not na(HTFTrendLabel))
+        label.delete(HTFTrendLabel)
+
+    ///
+    if show_HTFTrend1 and showLabels
+        HTFTrendLabel := label.new(x=bar_index, y=emaHTFTrend1, text="<----------------------HTF " + str.tostring(l1), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+ 
+emaHTFTrend2 = request.security(syminfo.tickerid, HTFTimeframe, ta.ema(close, l3))
+plot(show_HTFTrend2 ? emaHTFTrend2 : na, "4hr Trend", color=color.rgb(25, 116, 3, 15), style=plot.style_cross, linewidth = 2)
+var label HTFTrendLabel2 = na
+if barstate.islast
+    // Delete previous labels
+    if (not na(HTFTrendLabel2))
+        label.delete(HTFTrendLabel2)
+
+    ///
+    if show_HTFTrend2 and showLabels
+        HTFTrendLabel2 := label.new(x=bar_index, y=emaHTFTrend2, text="<----------------------HTF " + str.tostring(l3), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+
+emaHTFTrend3 = request.security(syminfo.tickerid, HTFTimeframe, ta.ema(close, l2))
+
+isHTFDownTrend = emaHTFTrend1 < emaHTFTrend3 and emaHTFTrend3 < emaHTFTrend2
+isHTFUpTrend = emaHTFTrend1 > emaHTFTrend3 and emaHTFTrend3 > emaHTFTrend2
+
+// Fill between 20 and 200 EMAs based on conditions
+p7 = plot(show_HTFFill ? emaHTFTrend1 : na, color=color.rgb(33, 149, 243, 100), title = "Fill HTF EMA 1")
+p8 = plot(show_HTFFill ? emaHTFTrend2 : na, color=color.rgb(76, 175, 79, 100), title = "Fill HTF EMA 2")
+fill(p7, p8, color= isHTFUpTrend and show_HTFFill ? color.new(color.green, 60) : na, title="Bullish Zone")
+fill(p7, p8, color= isHTFDownTrend and show_HTFFill ? color.new(color.red, 60) : na, title="Bearish Zone")
+
+ema4hr200 = request.security(syminfo.tickerid, "240", ta.ema(close, l4))
+plot(show_4hr200 ? ema4hr200 : na, "4hr200EMA", color=color.rgb(51, 255, 0, 15), style=plot.style_cross, linewidth = 2)
+var label H4200Label = na
+if barstate.islast
+    // Delete previous labels
+    if (not na(H4200Label))
+        label.delete(H4200Label)
+
+    ///
+    if show_4hr200 and showLabels
+        H4200Label := label.new(x=bar_index, y=ema4hr200, text="<----------------------4hr" + str.tostring(l4), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+
+emaDailyTrend = request.security(syminfo.tickerid, "1D", ta.ema(close, l1))
+plot(show_DailyTrend ? emaDailyTrend : na, "Daily Trend", color=color.rgb(211, 142, 238, 15), style=plot.style_cross, linewidth = 2)
+var label DailyTrendLabel = na
+if barstate.islast
+    // Delete previous labels
+    if (not na(DailyTrendLabel))
+        label.delete(DailyTrendLabel)
+
+    ///
+    if show_DailyTrend and showLabels
+        DailyTrendLabel := label.new(x=bar_index, y=emaDailyTrend, text="<----------------------Daily" + str.tostring(l1), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+  
+emaDaily200 = request.security(syminfo.tickerid, "1D", ta.ema(close, l4))
+plot(show_Daily200 ? emaDaily200 : na, "Daily 200EMA", color=color.rgb(175, 19, 236, 15), linewidth = 2)
+var label Daily200Label = na
+if barstate.islast
+    // Delete previous labels
+    if (not na(Daily200Label))
+        label.delete(Daily200Label)
+
+    ///
+    if show_Daily200 and showLabels
+        Daily200Label := label.new(x=bar_index, y=emaDaily200, text="<----------------------Daily" + str.tostring(l4), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+ 
+ma1hr100 = request.security(syminfo.tickerid, "60", ta.sma(close, l6))
+plot(show_1hr100 ? ma1hr100 : na, "1hr100MA", color=#f73a89c0, linewidth = 2)
+var label H1100Label = na
+if barstate.islast
+    // Delete previous labels
+    if (not na(H1100Label))
+        label.delete(H1100Label)
+
+    ///
+    if show_1hr100 and showLabels
+        H1100Label := label.new(x=bar_index, y=ma1hr100, text="<----------------------1hr" + str.tostring(l6), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))

@@ -1,0 +1,725 @@
+//@version=5
+indicator("Buz - Trend lite", shorttitle="Buz - Trend lite", overlay=true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
+//lite version of buz-haven trend minus table
+//v33 go Back
+//v34 - retry table calcs
+
+colorScheme = input.string("Dark", title = "Dark vs Light Mode", options = ["Dark", "Light"])
+showTable = input(true, title="Show Dashboard")
+showTCEmas = input(true, title="Show HTF EMAs", group="---Lines---")
+show_Smas = input(true, title="Show SMAs", group="---Lines---")
+show_Trend = input(true, title="Show Trend", group="---Lines---")
+show_HTFTrend1 = input(false, title="Show HTF Trend 1", group="---HTF Lines---")
+show_HTFTrend2 = input(false, title="Show HTF Trend 2", group="---HTF Lines---")
+show_HTFTrend3 = input(false, title="Show HTF Trend 3", group="---HTF Lines---")
+HTFTimeframe = input.string("240", title = "HTF Trend 1", options = ["1","3","6","15","30","60","240","720"], group="---HTF Lines---")
+show_HTFFill = input(true, title="Show HTF Fill", group="---HTF Lines---")
+show_4hr200 = input(true, title="Show 4hr 200EMA", group="---HTF Lines---")
+show_1hr100 = input(true, title="Show 1hr 100MA", group="---HTF Lines---")
+show_DailyTrend = input(true, title="Show Daily Trend", group="---HTF Lines---")
+show_Daily200 = input(true, title="Show Daily 200EMA", group="---HTF Lines---")
+show_banana = input(false, title= "Show Banana", group="Banaananananana")
+showEMAFill = input(false, title="Show EMA Fill", group = "---Fills---")
+showTrendFill = input(true, title="Show Trend Fill", group = "---Fills---")
+showSMAFill = input(false, title="Show SMA Fill", group = "---Fills---")
+showLabels = input(true, title="Show labels", group = "---Labels---")
+
+showEMA1 = input(true, title="Show EMA 13", group = "---EMAs---", inline = "1")
+showEMA2 = input(true, title="Show EMA 25", group = "---EMAs---", inline = "1")
+showEMA3 = input(true, title="Show EMA 32", group = "---EMAs---", inline = "2")
+showEMA4 = input(true, title="Show EMA 200", group = "---EMAs---", inline = "2")
+showSMA1 = input(true, title="Show SMA 50", group = "---SMAs---", inline = "3")
+showSMA2 = input(true, title="Show SMA 100", group = "---SMAs---", inline = "3")
+showSMA3 = input(true, title="Show SMA 200", group = "---SMAs---", inline = "4")
+showSMA4 = input(true, title="Show SMA 300", group = "---SMAs---", inline = "4")
+
+l1 = input.int(13, "EMA 1", group = "----- EMAs -----")
+l2 = input.int(25, "EMA 2", group = "----- EMAs -----")
+l3 = input.int(32, "EMA 3", group = "----- EMAs -----")
+l4 = input.int(200, "EMA 4", group = "----- EMAs -----")
+l5 = input.int(50, "SMA 1", group = "----- SMAs -----")
+l6 = input.int(100, "SMA 2", group = "----- SMAs -----")
+l7 = input.int(200, "SMA 3", group = "----- SMAs -----")
+l8 = input.int(300, "SMA 4", group = "----- SMAs -----")
+
+t3On= input(true, "T3 Switch")
+Length = input.int(50, "T3", minval=1)
+
+xPrice = close
+xe1 = ta.ema(xPrice, Length)
+xe2 = ta.ema(xe1, Length)
+xe3 = ta.ema(xe2, Length)
+xe4 = ta.ema(xe3, Length)
+xe5 = ta.ema(xe4, Length)
+xe6 = ta.ema(xe5, Length)
+b = 0.7
+c1 = -b*b*b
+c2 = 3*b*b+3*b*b*b
+c3 = -6*b*b-3*b-3*b*b*b
+c4 = 1+3*b+b*b*b+3*b*b
+nT3Average = c1 * xe6 + c2 * xe5 + c3 * xe4 + c4 * xe3
+plot(t3On ? nT3Average : na, color=color.rgb(231, 168, 32), title="T3")
+
+// EMAs and SMA
+ema1x = ta.ema(close, l1)
+ema2x = ta.ema(close, l2)
+ema3x = ta.ema(close, l3)
+ema4x = ta.ema(close, l4)
+
+sma1x = ta.sma(close, l5)
+sma2x = ta.sma(close, l6)
+sma3x = ta.sma(close, l7)
+sma4x = ta.sma(close, l8)
+
+//////////////////////////////////////////////////////////////////////////
+//
+//
+//                     Plotting EMAs/SMA
+//
+//
+//////////////////////////////////////////////////////////////////////////
+
+
+// Plotting RSI, EMAs, SMA based on user input
+var label Ema1Label = na
+var label Ema2Label = na
+var label Ema3Label = na
+var label Ema4Label = na
+var label Sma1Label = na
+var label Sma2Label = na
+var label Sma3Label = na
+var label Sma4Label = na
+
+//Colour Scheme
+color labelcolour = colorScheme == "Dark" ? color.rgb(253, 253, 253, 40) : color.rgb(19, 10, 150, 40)
+    
+// Plotting TC EMAs
+plot(show_Trend and showEMA1 ? ema1x : na, color=color.rgb(102, 182, 247), title = "EMA 13")
+plot(show_Trend and showEMA2 ? ema2x : na, color=color.rgb(83, 181, 247), title = "EMA 25")
+plot(show_Trend and showEMA3 ? ema3x : na, color=color.rgb(82, 85, 255), title = "EMA 32")
+plot(showTCEmas and showEMA4 ? ema4x : na, color=color.rgb(6, 2, 253), linewidth=2, title = "EMA 200")
+if barstate.islast
+    // Delete previous labels
+    if (not na(Ema1Label))
+        label.delete(Ema1Label)
+    if (not na(Ema2Label))
+        label.delete(Ema2Label)
+    if (not na(Ema3Label))
+        label.delete(Ema3Label)
+    if (not na(Ema4Label))
+        label.delete(Ema4Label)
+    ///
+    if show_Trend and showEMA1 and showLabels
+        Ema1Label := label.new(x=bar_index, y=ema1x, text= "EMA" + str.tostring(l1), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+    if show_Trend and showEMA2 and showLabels
+        Ema2Label := label.new(x=bar_index, y=ema2x, text="EMA" + str.tostring(l2), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+    if show_Trend and showEMA3 and showLabels
+        Ema3Label := label.new(x=bar_index, y=ema3x, text="EMA" + str.tostring(l3), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+    if showTCEmas and showEMA4 and showLabels
+        Ema4Label := label.new(x=bar_index, y=ema4x, text="EMA" + str.tostring(l4), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+
+// Plotting SMAs.
+plot(show_Smas and showSMA1 ? sma1x : na, color=color.rgb(247, 135, 135, 29), title = "SMA 1")
+plot(show_Smas and showSMA2 ? sma2x : na, color=color.rgb(255, 82, 105), title = "SMA 2")
+plot(show_Smas and showSMA3 ? sma3x : na, color=color.rgb(176, 39, 39), linewidth=2, title = "SMA 3")
+plot(show_Smas and showSMA4 ? sma4x : na, color=color.rgb(13, 151, 25), linewidth=2, title = "SMA 4")
+if barstate.islast
+    // Delete previous labels
+    if (not na(Sma1Label))
+        label.delete(Sma1Label)
+    if (not na(Sma2Label))
+        label.delete(Sma2Label)
+    if (not na(Sma3Label))
+        label.delete(Sma3Label)
+    if (not na(Sma4Label))
+        label.delete(Sma4Label)
+    ///
+    if show_Smas and showSMA1 and showLabels
+        Sma1Label := label.new(x=bar_index, y=sma1x, text="<----------SMA" + str.tostring(l5), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+    if show_Smas and showSMA2 and showLabels  
+        Sma2Label := label.new(x=bar_index, y=sma2x, text="<----------SMA" + str.tostring(l6), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+    if show_Smas and showSMA3 and showLabels
+        Sma3Label := label.new(x=bar_index, y=sma3x, text="<----------SMA" + str.tostring(l7), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+    if show_Smas and showSMA4 and showLabels
+        Sma4Label := label.new(x=bar_index, y=sma4x, text="<----------SMA" + str.tostring(l8), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+
+// Check EMA order for downtrend.
+isEMADownTrend = ema1x < ema2x and ema2x < ema3x and ema3x < ema4x
+isEMAUpTrend = ema1x > ema2x and ema2x > ema3x and ema3x > ema4x
+
+isSMADownTrend = sma2x < sma3x and sma3x < sma4x
+isSMAUpTrend = sma2x > sma3x and sma3x > sma4x
+
+isDownTrend = ema1x < ema2x and ema2x < ema3x
+isUpTrend = ema1x > ema2x and ema2x > ema3x
+
+isUpBanana = sma2x > ema4x and ema4x > sma4x
+isDownBanana = sma2x < ema4x and ema4x < sma4x
+
+trendUpPrice = close > ema1x
+trendDownPrice = close < ema1x
+
+trendStatus = if isUpTrend and trendUpPrice
+    "Uptrend"
+else
+    if isDownTrend and trendDownPrice
+        "Downtrend"
+    else
+        "Sideways"
+
+// Function to determine trend
+getTrendStatusX(price, ema1x, ema2x) =>
+    if price > ema2x and ema1x > ema2x
+        "Up"
+    else if price < ema2x and ema1x < ema2x
+        "Down"
+    else
+        "Neutral"
+
+// Function to determine SMA trend
+getSMATrendX(sma2x, sma3x, sma4x) =>
+    if sma2x > sma3x and sma3x > sma4x
+        "Up"
+    else if sma2x < sma3x and sma3x < sma4x
+        "Down"
+    else
+        "Neutral"
+
+// Function to calculate distance in percentage
+getDistancePercentageX(current, reference) =>
+    (current - reference) / reference * 100
+
+// Check for full alignment
+fullAlignment = if isEMAUpTrend and isSMAUpTrend
+    "Up"
+else if isEMADownTrend and isSMADownTrend
+    "Down"
+else
+    "Neutral"
+
+// Fill between 20 and 200 EMAs based on conditions
+p1 = plot(showTCEmas ? ema1x : na, color=color.rgb(33, 149, 243, 100), title = "Fill EMA 1")
+p2 = plot(showTCEmas ? ema4x : na, color=color.rgb(76, 175, 79, 100), title = "Fill EMA 4")
+fill(p1, p2, color= isEMAUpTrend and showEMAFill ? color.new(color.green, 60) : na, title="Bullish Zone")
+fill(p1, p2, color= isEMADownTrend and showEMAFill ? color.new(color.red, 60) : na, title="Bearish Zone")
+
+// Fill between 20 and 200 EMAs based on conditions
+p5 = plot(show_Trend ? ema1x : na, color=color.rgb(33, 149, 243, 100), title = "Fill Trend EMA 1")
+p6 = plot(show_Trend ? ema3x : na, color=color.rgb(76, 175, 79, 100), title = "Fill Trend EMA 2")
+fill(p5, p6, color= isUpTrend and showTrendFill ? color.new(color.green, 60) : na, title="Bullish Zone")
+fill(p5, p6, color= isDownTrend and showTrendFill ? color.new(color.red, 60) : na, title="Bearish Zone")
+
+// Fill between 20 and 200 EMAs based on conditions
+p3 = plot(show_Smas ? sma2x : na, color=color.rgb(33, 149, 243, 100), title = "Fill SMA 2")
+p4 = plot(show_Smas ? sma4x : na, color=color.rgb(76, 175, 79, 100), title = "Fill SMA 4")
+fill(p3, p4, color= isSMAUpTrend and showSMAFill ? color.new(#cb1df2, 70) : na, title="Bullish Zone")
+fill(p3, p4, color= isSMADownTrend and showSMAFill ? color.new(#f5ba0b, 70) : na, title="Bearish Zone")
+
+fill(p3,p4,color= isUpBanana and show_banana ? color.yellow : na,title="Banananana")
+fill(p3,p4,color= isDownBanana and show_banana ? color.yellow : na,title="Banananana")
+
+emaHTFTrend1 = request.security(syminfo.tickerid, HTFTimeframe, ta.ema(close, l1))
+plot(show_HTFTrend1 ? emaHTFTrend1 : na, "4hr Trend", color=color.rgb(25, 116, 3, 15), style=plot.style_cross, linewidth = 2)
+var label HTFTrendLabel = na
+if barstate.islast
+    // Delete previous labels
+    if (not na(HTFTrendLabel))
+        label.delete(HTFTrendLabel)
+
+    ///
+    if show_HTFTrend1 and showLabels
+        HTFTrendLabel := label.new(x=bar_index, y=emaHTFTrend1, text="<----------------------HTF " + str.tostring(l1), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+ 
+emaHTFTrend2 = request.security(syminfo.tickerid, HTFTimeframe, ta.ema(close, l3))
+plot(show_HTFTrend2 ? emaHTFTrend2 : na, "4hr Trend", color=color.rgb(25, 116, 3, 15), style=plot.style_cross, linewidth = 2)
+var label HTFTrendLabel2 = na
+if barstate.islast
+    // Delete previous labels
+    if (not na(HTFTrendLabel2))
+        label.delete(HTFTrendLabel2)
+
+    ///
+    if show_HTFTrend2 and showLabels
+        HTFTrendLabel2 := label.new(x=bar_index, y=emaHTFTrend2, text="<----------------------HTF " + str.tostring(l3), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+
+emaHTFTrend3 = request.security(syminfo.tickerid, HTFTimeframe, ta.ema(close, l2))
+plot(show_HTFTrend3 ? emaHTFTrend3 : na, "4hr Trend", color=color.rgb(25, 116, 3, 15), style=plot.style_cross, linewidth = 2)
+var label HTFTrendLabel3 = na
+if barstate.islast
+    // Delete previous labels
+    if (not na(HTFTrendLabel3))
+        label.delete(HTFTrendLabel3)
+
+    ///
+    if show_HTFTrend3 and showLabels
+        HTFTrendLabel3 := label.new(x=bar_index, y=emaHTFTrend3, text="<----------------------HTF " + str.tostring(l3), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+
+isHTFDownTrend = emaHTFTrend1 < emaHTFTrend3 and emaHTFTrend3 < emaHTFTrend2
+isHTFUpTrend = emaHTFTrend1 > emaHTFTrend3 and emaHTFTrend3 > emaHTFTrend2
+
+// Fill between 20 and 200 EMAs based on conditions
+p7 = plot(show_HTFFill ? emaHTFTrend1 : na, color=color.rgb(33, 149, 243, 100), title = "Fill HTF EMA 1")
+p8 = plot(show_HTFFill ? emaHTFTrend2 : na, color=color.rgb(76, 175, 79, 100), title = "Fill HTF EMA 2")
+fill(p7, p8, color= isHTFUpTrend and show_HTFFill ? color.new(color.green, 60) : na, title="Bullish Zone")
+fill(p7, p8, color= isHTFDownTrend and show_HTFFill ? color.new(color.red, 60) : na, title="Bearish Zone")
+
+ema4hr200 = request.security(syminfo.tickerid, "240", ta.ema(close, l4))
+plot(show_4hr200 ? ema4hr200 : na, "4hr200EMA", color=color.rgb(51, 255, 0, 15), style=plot.style_cross, linewidth = 2)
+var label H4200Label = na
+if barstate.islast
+    // Delete previous labels
+    if (not na(H4200Label))
+        label.delete(H4200Label)
+
+    ///
+    if show_4hr200 and showLabels
+        H4200Label := label.new(x=bar_index, y=ema4hr200, text="<----------------------4hr" + str.tostring(l4), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+
+emaDailyTrend = request.security(syminfo.tickerid, "1D", ta.ema(close, l1))
+plot(show_DailyTrend ? emaDailyTrend : na, "Daily Trend", color=color.rgb(211, 142, 238, 15), style=plot.style_cross, linewidth = 2)
+var label DailyTrendLabel = na
+if barstate.islast
+    // Delete previous labels
+    if (not na(DailyTrendLabel))
+        label.delete(DailyTrendLabel)
+
+    ///
+    if show_DailyTrend and showLabels
+        DailyTrendLabel := label.new(x=bar_index, y=emaDailyTrend, text="<----------------------Daily" + str.tostring(l1), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+  
+emaDaily200 = request.security(syminfo.tickerid, "1D", ta.ema(close, l4))
+plot(show_Daily200 ? emaDaily200 : na, "Daily 200EMA", color=color.rgb(175, 19, 236, 15), linewidth = 2)
+var label Daily200Label = na
+if barstate.islast
+    // Delete previous labels
+    if (not na(Daily200Label))
+        label.delete(Daily200Label)
+
+    ///
+    if show_Daily200 and showLabels
+        Daily200Label := label.new(x=bar_index, y=emaDaily200, text="<----------------------Daily" + str.tostring(l4), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+ 
+ma1hr100 = request.security(syminfo.tickerid, "60", ta.sma(close, l6))
+plot(show_1hr100 ? ma1hr100 : na, "1hr100MA", color=#f73a89c0, linewidth = 2)
+var label H1100Label = na
+if barstate.islast
+    // Delete previous labels
+    if (not na(H1100Label))
+        label.delete(H1100Label)
+
+    ///
+    if show_1hr100 and showLabels
+        H1100Label := label.new(x=bar_index, y=ma1hr100, text="<----------------------1hr" + str.tostring(l6), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelcolour, style=label.style_label_left, color = color.rgb(1,1,1,100))
+
+// Table.
+
+//////////////////////////////////////////////////////////////////////
+//                                                                  //
+//                  TABLE CALCS                                     //
+//                                                                  //
+//////////////////////////////////////////////////////////////////////
+
+string  tableYposInput = input.string("top", "Panel position", inline = "11", options = ["top", "middle", "bottom"])
+string  tableXposInput = input.string("right", "", inline = "11", options = ["left", "center", "right"])
+color   bullColorInput = input.color(color.new(color.green, 30), "Bull", inline = "12")
+color   bearColorInput = input.color(color.new(color.red, 30), "Bear", inline = "12")
+color   neutColorInput = input.color(color.new(color.gray, 30), "Neutral", inline = "12")
+
+// Define conditions for other timeframes.
+check5min = request.security(syminfo.tickerid, "1", close[5])
+check15min = request.security(syminfo.tickerid, "1", close[15])
+check30min = request.security(syminfo.tickerid, "1", close[30])
+check1hour = request.security(syminfo.tickerid, "1", close[60])
+check4hour = request.security(syminfo.tickerid, "1", close[240])
+check1day = request.security(syminfo.tickerid, "1", close[1440])
+checknow = open
+
+is5minBullish = checknow > check5min
+is15minBullish = checknow > check15min
+is30minBullish = checknow > check30min
+is1hourBullish = checknow > check1hour
+is4hourBullish = checknow > check4hour
+is1dayBullish = checknow > check1day
+
+is5minBearish = checknow < check5min
+is15minBearish = checknow < check15min
+is30minBearish = checknow < check30min
+is1hourBearish = checknow < check1hour
+is4hourBearish = checknow < check4hour
+is1dayBearish = checknow < check1day
+
+// EMA lineup
+[ema520t, ema550t, ema5200t] = request.security(syminfo.tickerid, "5", [ema1x, ema2x, ema3x])
+[ema1520t, ema1550t, ema15200t] = request.security(syminfo.tickerid, "15", [ema1x, ema2x, ema3x])
+[ema3020t, ema3050t, ema30200t] = request.security(syminfo.tickerid, "30", [ema1x, ema2x, ema3x])
+[ema1h20t, ema1h50t, ema1h200t] = request.security(syminfo.tickerid, "60", [ema1x, ema2x, ema3x])
+[ema4h20t, ema4h50t, ema4h200t] = request.security(syminfo.tickerid, "240", [ema1x, ema2x, ema3x])
+[ema1d20t, ema1d50t, ema1d200t] = request.security(syminfo.tickerid, "D", [ema1x, ema2x, ema3x])
+
+// 5-min timeframe
+uptrend5t = ema520t > ema550t and ema550t > ema5200t
+downtrend5t = ema520t < ema550t and ema550t < ema5200t
+
+// 15-min timeframe
+uptrend15t = ema1520t > ema1550t and ema1550t > ema15200t
+downtrend15t = ema1520t < ema1550t and ema1550t < ema15200t
+
+// 30-min timeframe
+uptrend30t = ema3020t > ema3050t and ema3050t > ema30200t
+downtrend30t = ema3020t < ema3050t and ema3050t < ema30200t
+
+// 1-hour timeframe
+uptrend1ht = ema1h20t > ema1h50t and ema1h50t > ema1h200t
+downtrend1ht = ema1h20t < ema1h50t and ema1h50t < ema1h200t
+
+// 4-hour timeframe
+uptrend4ht = ema4h20t > ema4h50t and ema4h50t > ema4h200t
+downtrend4ht = ema4h20t < ema4h50t and ema4h50t < ema4h200t
+
+// 1-day timeframe
+uptrend1dt = ema1d20t > ema1d50t and ema1d50t > ema1d200t
+downtrend1dt = ema1d20t < ema1d50t and ema1d50t < ema1d200t
+
+//Net Change
+netChange5min = checknow - check5min
+netChange15min = checknow - check15min
+netChange30min = checknow - check30min
+netChange1hour = checknow - check1hour
+netChange4hour = checknow - check4hour
+netChange1day = checknow - check1day
+
+netChangePercentage5min = ((checknow - check5min) / check5min) * 100
+netChangePercentage15min = ((checknow - check15min) / check15min) * 100
+netChangePercentage30min = ((checknow - check30min) / check30min) * 100
+netChangePercentage1hour = ((checknow - check1hour) / check1hour) * 100
+netChangePercentage4hour = ((checknow - check4hour) / check4hour) * 100
+netChangePercentage1day = ((checknow - check1day) / check1day) * 100
+
+btcCheck5min = request.security(ticker.modify("BYBIT:BTCUSDT.P"),"1", close[5])
+btcCheck15min = request.security(ticker.modify("BYBIT:BTCUSDT.P"),"1", close[15])
+btcCheck30min = request.security(ticker.modify("BYBIT:BTCUSDT.P"),"1", close[30])
+btcCheck1hour = request.security(ticker.modify("BYBIT:BTCUSDT.P"),"1", close[60])
+btcCheck4hour = request.security(ticker.modify("BYBIT:BTCUSDT.P"),"1", close[240])
+btcCheck1day = request.security(ticker.modify("BYBIT:BTCUSDT.P"),"1", close[1440])
+btcCheckNow = request.security(ticker.modify("BYBIT:BTCUSDT.P"),"1", open)
+
+btc5minBullish = btcCheckNow > btcCheck5min
+btc15minBullish = btcCheckNow > btcCheck15min
+btc30minBullish = btcCheckNow > btcCheck30min
+btc1hourBullish = btcCheckNow > btcCheck1hour
+btc4hourBullish = btcCheckNow > btcCheck4hour
+btc1dayBullish = btcCheckNow > btcCheck1day
+
+btc5minBearish = btcCheckNow < btcCheck5min
+btc15minBearish = btcCheckNow < btcCheck15min
+btc30minBearish = btcCheckNow < btcCheck30min
+btc1hourBearish = btcCheckNow < btcCheck1hour
+btc4hourBearish = btcCheckNow < btcCheck4hour
+btc1dayBearish = btcCheckNow < btcCheck1day
+
+// BTC EMA lineup
+[ema520, ema550, ema5200] = request.security(ticker.modify("BYBIT:BTCUSDT.P"), "5", [ema1x, ema2x, ema3x])
+[ema1520, ema1550, ema15200] = request.security(ticker.modify("BYBIT:BTCUSDT.P"), "15", [ema1x, ema2x, ema3x])
+[ema3020, ema3050, ema30200] = request.security(ticker.modify("BYBIT:BTCUSDT.P"), "30", [ema1x, ema2x, ema3x])
+[ema1h20, ema1h50, ema1h200] = request.security(ticker.modify("BYBIT:BTCUSDT.P"), "60", [ema1x, ema2x, ema3x])
+[ema4h20, ema4h50, ema4h200] = request.security(ticker.modify("BYBIT:BTCUSDT.P"), "240", [ema1x, ema2x, ema3x])
+[ema1d20, ema1d50, ema1d200] = request.security(ticker.modify("BYBIT:BTCUSDT.P"), "D", [ema1x, ema2x, ema3x])
+
+// 5-min timeframe
+btcuptrend5 = ema520 > ema550 and ema550 > ema5200
+btcdowntrend5 = ema520 < ema550 and ema550 < ema5200
+
+// 15-min timeframe
+btcuptrend15 = ema1520 > ema1550 and ema1550 > ema15200
+btcdowntrend15 = ema1520 < ema1550 and ema1550 < ema15200
+
+// 30-min timeframe
+btcuptrend30 = ema3020 > ema3050 and ema3050 > ema30200
+btcdowntrend30 = ema3020 < ema3050 and ema3050 < ema30200
+
+// 1-hour timeframe
+btcuptrend1h = ema1h20 > ema1h50 and ema1h50 > ema1h200
+btcdowntrend1h = ema1h20 < ema1h50 and ema1h50 < ema1h200
+
+// 4-hour timeframe
+btcuptrend4h = ema4h20 > ema4h50 and ema4h50 > ema4h200
+btcdowntrend4h = ema4h20 < ema4h50 and ema4h50 < ema4h200
+
+// 1-day timeframe
+btcuptrend1d = ema1d20 > ema1d50 and ema1d50 > ema1d200
+btcdowntrend1d = ema1d20 < ema1d50 and ema1d50 < ema1d200
+
+
+
+// ------------------------------------
+// ---------------Table----------------
+// ------------------------------------
+
+// Table creation and settings
+//Background vars
+var color cell_up = color.green
+var color cell_dn = color.red
+var color cell_neutral = color.gray
+var int cell_transp = 45
+//
+// trendStatus = if isUpTrend
+//     "Uptrend"
+// else
+//     if isDownTrend
+//         "Downtrend"
+//     else
+//         "Sideways"
+
+btctrendStatus5 = if btcuptrend5
+    "Uptrend"
+else
+    if btcdowntrend5
+        "Downtrend"
+    else
+        "Sideways"
+
+btctrendStatus15 = if btcuptrend15
+    "Uptrend"
+else
+    if btcdowntrend15
+        "Downtrend"
+    else
+        "Sideways"
+
+btctrendStatus30 = if btcuptrend30
+    "Uptrend"
+else
+    if btcdowntrend30
+        "Downtrend"
+    else
+        "Sideways"
+
+btctrendStatus1h = if btcuptrend1h
+    "Uptrend"
+else
+    if btcdowntrend1h
+        "Downtrend"
+    else
+        "Sideways"
+
+btctrendStatus4h = if btcuptrend4h
+    "Uptrend"
+else
+    if btcdowntrend4h
+        "Downtrend"
+    else
+        "Sideways"
+
+btctrendStatus1d = if btcuptrend1d
+    "Uptrend"
+else
+    if btcdowntrend1d
+        "Downtrend"
+    else
+        "Sideways"
+
+
+trendStatus5 = if uptrend5t
+    "Uptrend"
+else
+    if downtrend5t
+        "Downtrend"
+    else
+        "Sideways"
+
+trendStatus15 = if uptrend15t
+    "Uptrend"
+else
+    if downtrend15t
+        "Downtrend"
+    else
+        "Sideways"
+
+trendStatus30 = if uptrend30t
+    "Uptrend"
+else
+    if downtrend30t
+        "Downtrend"
+    else
+        "Sideways"
+
+trendStatus1h = if uptrend1ht
+    "Uptrend"
+else
+    if downtrend1ht
+        "Downtrend"
+    else
+        "Sideways"
+
+trendStatus4h = if uptrend4ht
+    "Uptrend"
+else
+    if downtrend4ht
+        "Downtrend"
+    else
+        "Sideways"
+
+trendStatus1d = if uptrend1dt
+    "Uptrend"
+else
+    if downtrend1dt
+        "Downtrend"
+    else
+        "Sideways"
+
+// Table creation and settings.
+var table tableId = table.new(tableYposInput + "_" + tableXposInput, 6, 8, bgcolor = color.rgb(0, 8, 11, 77), frame_color = color.green, frame_width = 1, border_color = color.white, border_width = 1)
+var string is5minStatus = na
+var string is15minStatus = na
+var string is30minStatus = na
+var string is1hourStatus = na
+var string is4hourStatus = na
+var string is1dayStatus = na
+var string btc5minStatus = na
+var string btc15minStatus = na
+var string btc30minStatus = na
+var string btc1hourStatus = na
+var string btc4hourStatus = na
+var string btc1dayStatus = na
+
+if barstate.islast
+
+//BTC.
+    btc5minStatus := if btc5minBullish
+        "Bullish"
+    else
+        "Bearish"
+
+    btc15minStatus := if btc15minBullish
+        "Bullish"
+    else
+        "Bearish"
+
+    btc30minStatus := if btc30minBullish
+        "Bullish"
+    else
+        "Bearish"
+
+    btc1hourStatus := if btc1hourBullish
+        "Bullish"
+    else
+        "Bearish"
+
+    btc4hourStatus := if btc4hourBullish
+        "Bullish"
+    else
+        "Bearish"
+
+    btc1dayStatus := if btc1dayBullish
+        "Bullish"
+    else
+        "Bearish"
+
+    is5minStatus := if is5minBullish
+        "Bullish"
+    else
+        "Bearish"
+
+    is15minStatus := if is15minBullish
+        "Bullish"
+    else
+        "Bearish"
+
+    is30minStatus := if is30minBullish
+        "Bullish"
+    else
+        "Bearish"
+
+    is1hourStatus := if is1hourBullish
+        "Bullish"
+    else
+        "Bearish"
+
+    is4hourStatus := if is4hourBullish
+        "Bullish"
+    else
+        "Bearish"
+
+    is1dayStatus := if is1dayBullish
+        "Bullish"
+    else
+        "Bearish"
+
+if barstate.islast and showTable
+    table.cell(tableId, 0, 0, "EMA Line-Up", text_size = size.small, text_color = color.white)
+    table.cell(tableId, 1, 0, str.tostring(trendStatus), bgcolor=color.new(trendStatus == "Uptrend" ? cell_up : trendStatus == "Downtrend" ? cell_dn : cell_neutral, cell_transp), text_size = size.small, text_color = color.white)    
+   // table.cell(tableId, 2, 0, "Net Change", text_size = size.small, text_color = color.white) 
+   // table.cell(tableId, 3, 0, "Net % Change", text_size = size.small, text_color = color.white) 
+  //  table.cell(tableId, 4, 0, "BTC Move", text_size = size.small, text_color = color.white)
+    table.cell(tableId, 5, 0, "BTC Trend", text_size = size.small, text_color = color.white)
+
+    table.cell(tableId, 0, 1, "5 minute", text_size = size.small, text_color = color.white)
+    table.cell(tableId, 1, 1, str.tostring(trendStatus5), bgcolor=color.new(trendStatus5 == "Uptrend" ? cell_up : trendStatus5 == "Downtrend" ? cell_dn : cell_neutral, cell_transp), text_size = size.small, text_color = color.white)    
+   // table.cell(tableId, 2, 1, str.tostring(netChange5min), bgcolor=color.new(is5minStatus == "Bullish" ? cell_up : cell_dn, cell_transp), text_size = size.small, text_color = color.white)
+   // table.cell(tableId, 3, 1, str.tostring(netChangePercentage5min,format.percent), bgcolor=color.new(is5minStatus == "Bullish" ? cell_up : cell_dn, cell_transp), text_size = size.small, text_color = color.white)
+   // table.cell(tableId, 4, 1, str.tostring(btc5minStatus), bgcolor=color.new(btc5minStatus == "Bullish" ? cell_up : cell_dn, cell_transp), text_size = size.small, text_color = color.white)
+    table.cell(tableId, 5, 1, str.tostring(btctrendStatus5), bgcolor=color.new(btctrendStatus5 == "Uptrend" ? cell_up : btctrendStatus5 == "Downtrend" ? cell_dn : cell_neutral, cell_transp), text_size = size.small, text_color = color.white)    
+
+    table.cell(tableId, 0, 2, "15 minute", text_size = size.small, text_color = color.white)
+    table.cell(tableId, 1, 2, str.tostring(trendStatus15), bgcolor=color.new(trendStatus15 == "Uptrend" ? cell_up : trendStatus15 == "Downtrend" ? cell_dn : cell_neutral, cell_transp), text_size = size.small, text_color = color.white)    
+   // table.cell(tableId, 2, 2, str.tostring(netChange15min), bgcolor=color.new(is15minStatus == "Bullish" ? cell_up : cell_dn, cell_transp), text_size = size.small, text_color = color.white)
+   // table.cell(tableId, 3, 2, str.tostring(netChangePercentage15min,format.percent), bgcolor=color.new(is15minStatus == "Bullish" ? cell_up : cell_dn, cell_transp), text_size = size.small, text_color = color.white)
+  //  table.cell(tableId, 4, 2, str.tostring(btc15minStatus), bgcolor=color.new(btc15minStatus == "Bullish" ? cell_up : cell_dn, cell_transp), text_size = size.small, text_color = color.white)
+    table.cell(tableId, 5, 2, str.tostring(btctrendStatus15), bgcolor=color.new(btctrendStatus15 == "Uptrend" ? cell_up : btctrendStatus15 == "Downtrend" ? cell_dn : cell_neutral, cell_transp), text_size = size.small, text_color = color.white)    
+    
+    table.cell(tableId, 0, 3, "30 minute", text_size = size.small, text_color = color.white)
+    table.cell(tableId, 1, 3, str.tostring(trendStatus30), bgcolor=color.new(trendStatus30 == "Uptrend" ? cell_up : trendStatus30 == "Downtrend" ? cell_dn : cell_neutral, cell_transp), text_size = size.small, text_color = color.white)    
+   // table.cell(tableId, 2, 3, str.tostring(netChange30min), bgcolor=color.new(is30minStatus == "Bullish" ? cell_up : cell_dn, cell_transp), text_size = size.small, text_color = color.white)
+   // table.cell(tableId, 3, 3, str.tostring(netChangePercentage30min,format.percent), bgcolor=color.new(is30minStatus == "Bullish" ? cell_up : cell_dn, cell_transp), text_size = size.small, text_color = color.white)
+   // table.cell(tableId, 4, 3, str.tostring(btc30minStatus), bgcolor=color.new(btc30minStatus == "Bullish" ? cell_up : cell_dn, cell_transp), text_size = size.small, text_color = color.white)
+    table.cell(tableId, 5, 3, str.tostring(btctrendStatus30), bgcolor=color.new(btctrendStatus30 == "Uptrend" ? cell_up : btctrendStatus30 == "Downtrend" ? cell_dn : cell_neutral, cell_transp), text_size = size.small, text_color = color.white)    
+    
+    table.cell(tableId, 0, 4, "1 hour", text_size = size.small, text_color = color.white)
+    table.cell(tableId, 1, 4, str.tostring(trendStatus1h), bgcolor=color.new(trendStatus1h == "Uptrend" ? cell_up : trendStatus1h == "Downtrend" ? cell_dn : cell_neutral, cell_transp), text_size = size.small, text_color = color.white)    
+   // table.cell(tableId, 2, 4, str.tostring(netChange1hour), bgcolor=color.new(is1hourStatus == "Bullish" ? cell_up : cell_dn, cell_transp), text_size = size.small, text_color = color.white)
+   // table.cell(tableId, 3, 4, str.tostring(netChangePercentage1hour,format.percent), bgcolor=color.new(is1hourStatus == "Bullish" ? cell_up : cell_dn, cell_transp), text_size = size.small, text_color = color.white)
+    //table.cell(tableId, 4, 4, str.tostring(btc1hourStatus), bgcolor=color.new(btc1hourStatus == "Bullish" ? cell_up : cell_dn, cell_transp), text_size = size.small, text_color = color.white)
+    table.cell(tableId, 5, 4, str.tostring(btctrendStatus1h), bgcolor=color.new(btctrendStatus1h == "Uptrend" ? cell_up : btctrendStatus1h == "Downtrend" ? cell_dn : cell_neutral, cell_transp), text_size = size.small, text_color = color.white)    
+    
+    table.cell(tableId, 0, 5, "4 hour", text_size = size.small, text_color = color.white)
+    table.cell(tableId, 1, 5, str.tostring(trendStatus4h), bgcolor=color.new(trendStatus4h == "Uptrend" ? cell_up : trendStatus4h == "Downtrend" ? cell_dn : cell_neutral, cell_transp), text_size = size.small, text_color = color.white)    
+  //  table.cell(tableId, 2, 5, str.tostring(netChange4hour), bgcolor=color.new(is4hourStatus == "Bullish" ? cell_up : cell_dn, cell_transp), text_size = size.small, text_color = color.white)
+  //  table.cell(tableId, 3, 5, str.tostring(netChangePercentage4hour,format.percent), bgcolor=color.new(is4hourStatus == "Bullish" ? cell_up : cell_dn, cell_transp), text_size = size.small, text_color = color.white)
+  //  table.cell(tableId, 4, 5, str.tostring(btc4hourStatus), bgcolor=color.new(btc4hourStatus == "Bullish" ? cell_up : cell_dn, cell_transp), text_size = size.small, text_color = color.white)
+    table.cell(tableId, 5, 5, str.tostring(btctrendStatus4h), bgcolor=color.new(btctrendStatus4h == "Uptrend" ? cell_up : btctrendStatus4h == "Downtrend" ? cell_dn : cell_neutral, cell_transp), text_size = size.small, text_color = color.white)    
+    
+    table.cell(tableId, 0, 6, "1 day", text_size = size.small, text_color = color.white)
+    table.cell(tableId, 1, 6, str.tostring(trendStatus1d), bgcolor=color.new(trendStatus1d == "Uptrend" ? cell_up : trendStatus1d == "Downtrend" ? cell_dn : cell_neutral, cell_transp), text_size = size.small, text_color = color.white)    
+   // table.cell(tableId, 2, 6, str.tostring(netChange1day), bgcolor=color.new(is1dayStatus == "Bullish" ? cell_up : cell_dn, cell_transp), text_size = size.small, text_color = color.white)
+   // table.cell(tableId, 3, 6, str.tostring(netChangePercentage1day,format.percent), bgcolor=color.new(is1dayStatus == "Bullish" ? cell_up : cell_dn, cell_transp), text_size = size.small, text_color = color.white)
+   // table.cell(tableId, 4, 6, str.tostring(btc1dayStatus), bgcolor=color.new(btc1dayStatus == "Bullish" ? cell_up : cell_dn, cell_transp), text_size = size.small, text_color = color.white)
+    table.cell(tableId, 5, 6, str.tostring(btctrendStatus1d), bgcolor=color.new(btctrendStatus1d == "Uptrend" ? cell_up : btctrendStatus1d == "Downtrend" ? cell_dn : cell_neutral, cell_transp), text_size = size.small, text_color = color.white)    
+
+//Alerts
+
+// Alerts
+//if goldenCross
+    //alert(message="Golden Cross\nEMA lineup is " + trendStatus + "\n5min - " + is5minStatus + "\n15min - " + is15minStatus + "\n30min - " + is30minStatus + "\n30min - " + is1hourStatus + "\n30min - " + is4hourStatus + "\n30min - " + is1dayStatus, freq=alert.freq_once_per_bar_close)
+
+//if deathCross
+    //alert(message="Death Cross\nEMA lineup is " + trendStatus + "\n5min - " + is5minStatus + "\n15min - " + is15minStatus + "\n30min - " + is30minStatus + "\n30min - " + is1hourStatus + "\n30min - " + is4hourStatus + "\n30min - " + is1dayStatus, freq=alert.freq_once_per_bar_close)
+
+// Check if all timeframes are aligned in either uptrend or downtrend
+allUptrend = uptrend5t and uptrend15t and uptrend30t and uptrend1ht and uptrend4ht and uptrend1dt
+allDowntrend = downtrend5t and downtrend15t and downtrend30t and downtrend1ht and downtrend4ht and downtrend1dt
+
+var bool alertTriggered = false // Variable to track if the alert has been triggered
+
+// Alerts
+if allUptrend and not alertTriggered
+    alert(message="All Timeframes Aligned in Uptrend", freq=alert.freq_once_per_bar_close)
+    alertTriggered := true // Set the trigger flag to true
+
+if allDowntrend and not alertTriggered
+    alert(message="All Timeframes Aligned in Downtrend", freq=alert.freq_once_per_bar_close)
+    alertTriggered := true // Set the trigger flag to true
+
+// Reset the trigger flag if the condition no longer holds true
+if not allUptrend and not allDowntrend
+    alertTriggered := false
+

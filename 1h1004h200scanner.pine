@@ -1,0 +1,188 @@
+//@version=6
+indicator("Buz - 1hr100 & 4hr200 scanner", "Buz - Scanner", overlay=true)
+
+// Input for number of coins to display
+numCoins = input.int(20, title="Number of Coins", minval=1, maxval=20)
+
+// Inputs for 20 coins using `input.symbol`
+coin1_enabled = input.bool(true, title="Enable Coin 1", inline="coin1")
+coin1 = input.symbol("BYBIT:BTCUSDT.P", title="Coin 1", inline="coin1")
+
+coin2_enabled = input.bool(true, title="Enable Coin 2", inline="coin2")
+coin2 = input.symbol("BYBIT:ETHUSDT.P", title="Coin 2", inline="coin2")
+
+coin3_enabled = input.bool(true, title="Enable Coin 3", inline="coin3")
+coin3 = input.symbol("BYBIT:SOLUSDT.P", title="Coin 3", inline="coin3")
+
+coin4_enabled = input.bool(true, title="Enable Coin 4", inline="coin4")
+coin4 = input.symbol("BYBIT:XRPUSDT.P", title="Coin 4", inline="coin4")
+
+coin5_enabled = input.bool(true, title="Enable Coin 5", inline="coin5")
+coin5 = input.symbol("BYBIT:BNBUSDT.P", title="Coin 5", inline="coin5")
+
+coin6_enabled = input.bool(true, title="Enable Coin 6", inline="coin6")
+coin6 = input.symbol("BYBIT:ADAUSDT.P", title="Coin 6", inline="coin6")
+
+coin7_enabled = input.bool(true, title="Enable Coin 7", inline="coin7")
+coin7 = input.symbol("BYBIT:OPUSDT.P", title="Coin 7", inline="coin7")
+
+coin8_enabled = input.bool(true, title="Enable Coin 8", inline="coin8")
+coin8 = input.symbol("BYBIT:DOGEUSDT.P", title="Coin 8", inline="coin8")
+
+coin9_enabled = input.bool(true, title="Enable Coin 9", inline="coin9")
+coin9 = input.symbol("BYBIT:ORDIUSDT.P", title="Coin 9", inline="coin9")
+
+coin10_enabled = input.bool(true, title="Enable Coin 10", inline="coin10")
+coin10 = input.symbol("BYBIT:LINKUSDT.P", title="Coin 10", inline="coin10")
+
+coin11_enabled = input.bool(true, title="Enable Coin 11", inline="coin11")
+coin11 = input.symbol("BYBIT:AVAXUSDT.P", title="Coin 11", inline="coin11")
+
+coin12_enabled = input.bool(true, title="Enable Coin 12", inline="coin12")
+coin12 = input.symbol("BYBIT:DOTUSDT.P", title="Coin 12", inline="coin12")
+
+coin13_enabled = input.bool(true, title="Enable Coin 13", inline="coin13")
+coin13 = input.symbol("BYBIT:LTCUSDT.P", title="Coin 13", inline="coin13")
+
+coin14_enabled = input.bool(true, title="Enable Coin 14", inline="coin14")
+coin14 = input.symbol("BYBIT:ATOMUSDT.P", title="Coin 14", inline="coin14")
+
+coin15_enabled = input.bool(true, title="Enable Coin 15", inline="coin15")
+coin15 = input.symbol("BYBIT:NEARUSDT.P", title="Coin 15", inline="coin15")
+
+coin16_enabled = input.bool(true, title="Enable Coin 16", inline="coin16")
+coin16 = input.symbol("BYBIT:AAVEUSDT.P", title="Coin 16", inline="coin16")
+
+coin17_enabled = input.bool(true, title="Enable Coin 17", inline="coin17")
+coin17 = input.symbol("BYBIT:UNIUSDT.P", title="Coin 17", inline="coin17")
+
+coin18_enabled = input.bool(true, title="Enable Coin 18", inline="coin18")
+coin18 = input.symbol("BYBIT:SUSHIUSDT.P", title="Coin 18", inline="coin18")
+
+coin19_enabled = input.bool(true, title="Enable Coin 19", inline="coin19")
+coin19 = input.symbol("BYBIT:ETCUSDT.P", title="Coin 19", inline="coin19")
+
+coin20_enabled = input.bool(true, title="Enable Coin 20", inline="coin20")
+coin20 = input.symbol("BYBIT:SANDUSDT.P", title="Coin 20", inline="coin20")
+
+sma1 = input.int(100, title="SMA Length", minval=1, group = "---- SMA/EMA ----")
+ema1 = input.int(200, title="EMA Length", minval=1, group = "---- SMA/EMA ----")
+smaHTF = input.string("60", title = "SMA Timeframe", options = ["1","3","6","15","30","60","240","720"], group = "---- SMA/EMA ----")
+emaHTF = input.string("240", title = "EMA Timeframe", options = ["1","3","6","15","30","60","240","720"], group = "---- SMA/EMA ----")
+
+// Debug columns toggle inputs
+show1h100 = input.bool(false, title="Show SMA Value", group = "---- Debug ----")
+show4h200 = input.bool(false, title="Show EMA Value", group = "---- Debug ----")
+
+// Table customization inputs
+string tableYposInput = input.string("top", "Panel position", inline="pos", options=["top", "middle", "bottom"])
+string tableXposInput = input.string("right", "", inline="pos", options=["left", "center", "right"])
+color bullColorInput = input.color(color.new(color.green, 30), "Bull Color", inline="color")
+color bearColorInput = input.color(color.new(color.red, 30), "Bear Color", inline="color")
+size = input.string(size.small, title='Text Size', options=[size.normal, size.small, size.tiny])
+
+// Function to format timeframe text
+get_tf_text(tf) =>
+    switch tf
+        "1" => "1m"
+        "3" => "3m"
+        "5" => "5m"
+        "15" => "15m"
+        "30" => "30m"
+        "60" => "1h"
+        "240" => "4h"
+        "720" => "12h"
+        => tf
+
+// Create the table
+var table tableId = table.new(tableYposInput + "_" + tableXposInput, 4 + (show1h100 ? 1 : 0) + (show4h200 ? 1 : 0), 21, bgcolor=color.rgb(0, 8, 11, 77), frame_color=color.green, frame_width=1, border_color=color.white, border_width=1)
+
+// Add headers to the table
+if bar_index == 0
+    sma_header = get_tf_text(smaHTF) + str.tostring(sma1)
+    ema_header = get_tf_text(emaHTF) + str.tostring(ema1)
+    
+    table.cell(tableId, 0, 0, "Coin", bgcolor=color.rgb(7, 41, 163), text_size=size, text_color=color.white)
+    table.cell(tableId, 1, 0, "Current Price", bgcolor=color.rgb(7, 41, 163), text_size=size, text_color=color.white)
+    table.cell(tableId, 2, 0, sma_header + " Status", bgcolor=color.rgb(7, 41, 163), text_size=size, text_color=color.white)
+    table.cell(tableId, 3, 0, ema_header + " Status", bgcolor=color.rgb(7, 41, 163), text_size=size, text_color=color.white)
+    if show1h100
+        table.cell(tableId, 4, 0, sma_header + " Value", bgcolor=color.rgb(7, 41, 163), text_size=size, text_color=color.white)
+    if show4h200
+        table.cell(tableId, 5, 0, ema_header + " Value", bgcolor=color.rgb(7, 41, 163), text_size=size, text_color=color.white)
+
+// Function to check price status relative to SMA and EMA
+check_price_status(symbol) =>
+    string sym = str.upper(symbol)
+    [price_1h, sma1h] = request.security(sym, smaHTF, [close, ta.sma(close, sma1)])
+    [price_4h, ema4h] = request.security(sym, emaHTF, [close, ta.ema(close, ema1)])
+    
+    sma_text = "Above " + get_tf_text(smaHTF) + str.tostring(sma1)
+    sma_text_below = "Below " + get_tf_text(smaHTF) + str.tostring(sma1)
+    ema_text = "Above " + get_tf_text(emaHTF) + str.tostring(ema1)
+    ema_text_below = "Below " + get_tf_text(emaHTF) + str.tostring(ema1)
+    
+    sma_status = price_1h > sma1h ? sma_text : sma_text_below
+    ema_status = price_4h > ema4h ? ema_text : ema_text_below
+    sma_color = price_1h > sma1h ? bullColorInput : bearColorInput
+    ema_color = price_4h > ema4h ? bullColorInput : bearColorInput
+    [price_1h, sma_status, ema_status, sma_color, ema_color, sma1h, ema4h]
+
+// Combine coins into an array based on number of coins selected
+var string[] coins = array.new_string()
+if barstate.isfirst
+    array.clear(coins)
+    if coin1_enabled and numCoins >= 1
+        array.push(coins, str.upper(coin1))
+    if coin2_enabled and numCoins >= 2
+        array.push(coins, str.upper(coin2))
+    if coin3_enabled and numCoins >= 3
+        array.push(coins, str.upper(coin3))
+    if coin4_enabled and numCoins >= 4
+        array.push(coins, str.upper(coin4))
+    if coin5_enabled and numCoins >= 5
+        array.push(coins, str.upper(coin5))
+    if coin6_enabled and numCoins >= 6
+        array.push(coins, str.upper(coin6))
+    if coin7_enabled and numCoins >= 7
+        array.push(coins, str.upper(coin7))
+    if coin8_enabled and numCoins >= 8
+        array.push(coins, str.upper(coin8))
+    if coin9_enabled and numCoins >= 9
+        array.push(coins, str.upper(coin9))
+    if coin10_enabled and numCoins >= 10
+        array.push(coins, str.upper(coin10))
+    if coin11_enabled and numCoins >= 11
+        array.push(coins, str.upper(coin11))
+    if coin12_enabled and numCoins >= 12
+        array.push(coins, str.upper(coin12))
+    if coin13_enabled and numCoins >= 13
+        array.push(coins, str.upper(coin13))
+    if coin14_enabled and numCoins >= 14
+        array.push(coins, str.upper(coin14))
+    if coin15_enabled and numCoins >= 15
+        array.push(coins, str.upper(coin15))
+    if coin16_enabled and numCoins >= 16
+        array.push(coins, str.upper(coin16))
+    if coin17_enabled and numCoins >= 17
+        array.push(coins, str.upper(coin17))
+    if coin18_enabled and numCoins >= 18
+        array.push(coins, str.upper(coin18))
+    if coin19_enabled and numCoins >= 19
+        array.push(coins, str.upper(coin19))
+    if coin20_enabled and numCoins >= 20
+        array.push(coins, str.upper(coin20))
+
+// Update table with enabled coins
+if array.size(coins) > 0
+    for i = 0 to array.size(coins) - 1
+        coin = array.get(coins, i)
+        [price, sma_status, ema_status, sma_color, ema_color, sma1h_value, ema4h_value] = check_price_status(coin)
+        table.cell(tableId, 0, i + 1, coin, bgcolor=color.rgb(56, 56, 56, 15), text_color=color.white, text_size=size)
+        table.cell(tableId, 1, i + 1, str.tostring(price, '$#.##'), bgcolor=color.rgb(56, 56, 56, 15), text_color=color.white, text_size=size)
+        table.cell(tableId, 2, i + 1, sma_status, bgcolor=sma_color, text_size=size)
+        table.cell(tableId, 3, i + 1, ema_status, bgcolor=ema_color, text_size=size)
+        if show1h100
+            table.cell(tableId, 4, i + 1, str.tostring(sma1h_value, '$#.##'), bgcolor=color.rgb(56, 56, 56, 15), text_color=color.white, text_size=size)
+        if show4h200
+            table.cell(tableId, 5, i + 1, str.tostring(ema4h_value, '$#.##'), bgcolor=color.rgb(56, 56, 56, 15), text_color=color.white, text_size=size)
