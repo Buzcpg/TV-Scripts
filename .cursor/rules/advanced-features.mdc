@@ -1,0 +1,549 @@
+---
+description: Advanced features and trading concepts in the MTF EMA strategy (v48-v50)
+---
+
+# Advanced Features Guide (v48-v50)
+
+## Overview
+
+This rule covers the advanced features added in versions 48-50 of the MTF EMA Trend Compound strategy, including flexible entry/exit methods, time-based filters, and anti-chop systems.
+
+## Feature Categories
+
+### Entry & Exit Flexibility (v48)
+1. EMA-Based Stop Loss
+2. Selectable Entry EMA
+3. Wick vs Close Cross Detection
+
+### Time-Based Filters (v49-v50)
+4. Trend Duration Filter
+5. HTF Level Cooldown
+
+---
+
+## 1. EMA-Based Stop Loss (v48)
+
+### Purpose
+Use an EMA as the stop loss level instead of pivots or ATR, allowing dynamic stops that adapt to price action.
+
+### Implementation Location
+- **Inputs**: Lines ~59-76 (Stop Loss Settings)
+- **Calculation**: Lines ~957-983 (Long Entry), ~1067-1093 (Short Entry)
+
+### Code Pattern
+```pine
+// In settings
+stop_loss_method = input.string("Pivot", "Stop Loss Method", 
+    options=["Pivot", "ATR", "EMA"])
+stop_ema_choice = input.string("EMA2", "Stop Loss EMA",
+    options=["EMA1", "EMA2", "EMA3", "EMA4"])
+
+// In entry calculation
+if stop_loss_method == "EMA"
+    if stop_ema_choice == "EMA1" and use_ema1
+        stop := ema1
+    else if stop_ema_choice == "EMA2" and use_ema2
+        stop := ema2
+    else if stop_ema_choice == "EMA3" and use_ema3
+        stop := ema3
+    else if stop_ema_choice == "EMA4" and use_ema4
+        stop := ema4
+    else
+        // Fallback to first enabled EMA
+        if use_ema1
+            stop := ema1
+        // ... etc
+```
+
+### Use Cases
+
+**Tight Scalping Stops (EMA1)**:
+```
+EMA1: 50
+Stop Method: EMA (EMA1)
+Result: Very tight stop at 50 EMA
+Risk: Small $ amount but higher stop-out rate
+```
+
+**Balanced Stops (EMA2)**:
+```
+EMA1: 50, EMA2: 200
+Entry: EMA1 cross
+Stop Method: EMA (EMA2)
+Result: Enter on 50 EMA, stop at 200 EMA
+Risk: Distance between EMAs = risk per trade
+```
+
+**Wide Swing Stops (EMA3/EMA4)**:
+```
+Stop Method: EMA (EMA3 or EMA4)
+Result: Very wide stops, gives trade room
+Risk: Large $ amount but lower stop-out rate
+```
+
+### Important Notes
+- Stop is **static** at entry (doesn't trail the EMA)
+- Still respects `min_stop_distance_pct` and `max_stop_distance_pct`
+- Position size auto-adjusts based on EMA distance
+- Trade rejected if stop ends up on wrong side of entry
+
+---
+
+## 2. Selectable Entry EMA (v48)
+
+### Purpose
+Choose which EMA triggers the entry retest/cross, allowing control over entry timing and pullback depth.
+
+### Implementation Location
+- **Inputs**: Lines ~112-113 (Strategy Settings)
+- **Logic**: Lines ~710-763 (Retest Detection)
+
+### Code Pattern
+```pine
+// In settings
+entry_ema_choice = input.string("EMA1", "Entry EMA Cross",
+    options=["EMA1", "EMA2", "EMA3", "EMA4"])
+
+// Determine retest EMA
+float retest_ema = na
+if entry_ema_choice == "EMA1" and use_ema1
+    retest_ema := ema1
+else if entry_ema_choice == "EMA2" and use_ema2
+    retest_ema := ema2
+// ... with fallback logic
+```
+
+### Entry Timing Matrix
+
+| Entry EMA | Pullback Depth | Entry Frequency | Best For |
+|-----------|---------------|-----------------|----------|
+| EMA1 (50) | Shallow | High | Scalping, active trading |
+| EMA2 (200) | Medium | Medium | Swing trading |
+| EMA3 (250) | Deep | Low | Position trading |
+| EMA4 (1000) | Very Deep | Very Low | Major trend only |
+
+### Strategy Examples
+
+**Aggressive Scalper**:
+```pine
+Entry EMA: EMA1
+Cross Method: Wick
+Stop Method: ATR or EMA2
+Result: Quick entries on minor pullbacks
+```
+
+**Patient Swing Trader**:
+```pine
+Entry EMA: EMA2
+Cross Method: Close
+Stop Method: EMA3
+Result: Wait for deeper pullbacks, wider stops
+```
+
+**Confirmation Strategy**:
+```pine
+Entry EMA: EMA2 (200)
+Require: All EMAs aligned
+Result: Enter on 200 EMA after full alignment confirmed
+```
+
+---
+
+## 3. Wick vs Close Cross Detection (v48)
+
+### Purpose
+Control how EMA crosses are detected - whether candle must close beyond EMA or just touch with wick.
+
+### Implementation Location
+- **Inputs**: Lines ~115 (Strategy Settings)
+- **Logic**: Lines ~730-755 (Retest Detection)
+
+### Code Pattern
+```pine
+// In settings
+cross_detection_method = input.string("Close", "Cross Detection Method",
+    options=["Close", "Wick"])
+
+// In retest logic
+if cross_detection_method == "Close"
+    // Candle must close beyond EMA
+    currently_below := close < retest_ema
+    currently_above := close > retest_ema
+else  // "Wick"
+    // Wick touches but doesn't close beyond
+    currently_below := low < retest_ema and close >= retest_ema
+    currently_above := high > retest_ema and close <= retest_ema
+```
+
+### Method Comparison
+
+**Close Method (Conservative)**:
+- Requires candle to **close** beyond EMA
+- More confirmation, fewer false signals
+- Better for swing trading
+- Waits for clear commitment
+
+**Wick Method (Aggressive)**:
+- Triggers when price **touches** EMA with wick
+- Faster entries, more signals
+- Better for scalping
+- Catches quick rejections
+
+### Visual Examples
+
+**Close Method**:
+```
+Candle 1: Opens above EMA, closes below → Retest started
+Candle 2: Opens below EMA, closes above → Entry triggered
+```
+
+**Wick Method**:
+```
+Candle: Opens above EMA, wicks down to EMA, closes above
+→ Entry triggered immediately (didn't need to close below)
+```
+
+### Use Case Matrix
+
+| Timeframe | Market | Method | Rationale |
+|-----------|--------|--------|-----------|
+| 1m-5m | Trending | Wick | Catch quick taps |
+| 1m-5m | Choppy | Close | Avoid whipsaws |
+| 15m-1H | Any | Close | Need confirmation |
+| 4H-D | Any | Close | Significant moves only |
+
+---
+
+## 4. Trend Duration Filter (v49)
+
+### Purpose
+Require trend to be established for minimum time before taking trades, preventing entries during choppy periods.
+
+### Implementation Location
+- **Inputs**: Lines ~177-182 (Trend Duration Filter)
+- **Logic**: Lines ~645-700 (AFTER bullish_alignment defined)
+- **Integration**: Lines ~1011-1013
+
+### Code Pattern
+```pine
+// Track consecutive aligned bars
+var int bullish_trend_bars = 0
+var int bearish_trend_bars = 0
+
+// Update counters (MUST be after bullish_alignment defined)
+if bullish_alignment
+    bullish_trend_bars := bullish_trend_bars + 1
+    bearish_trend_bars := 0
+else if bearish_alignment
+    bearish_trend_bars := bearish_trend_bars + 1
+    bullish_trend_bars := 0
+else
+    bullish_trend_bars := 0
+    bearish_trend_bars := 0
+
+// Convert hours to bars
+get_bars_per_hour() =>
+    timeframe_minutes = timeframe.in_seconds() / 60
+    bars_per_hour = 60 / timeframe_minutes
+    bars_per_hour
+
+// Calculate required bars
+trend_min_bars_required = 0
+if trend_time_method == "Hours"
+    bars_per_hour = get_bars_per_hour()
+    trend_min_bars_required := int(trend_min_hours * bars_per_hour)
+else
+    trend_min_bars_required := trend_min_bars
+
+// Check if duration met
+trend_time_long_ok = bullish_trend_bars >= trend_min_bars_required
+trend_time_short_ok = bearish_trend_bars >= trend_min_bars_required
+```
+
+### Critical Placement
+
+**Correct Order**:
+1. Calculate EMAs (~250)
+2. Build bullish_alignment/bearish_alignment (~618-646)
+3. Calculate bullish_trend/bearish_trend (~642-643)
+4. **NOW** add trend duration filter (~645-700)
+
+**Why**: Must use `bullish_alignment` which isn't defined until line ~646.
+
+### Configuration by Style
+
+| Trading Style | Timeframe | Duration | Method | Rationale |
+|--------------|-----------|----------|--------|-----------|
+| Scalper | 1m-5m | 3-6h | Hours | Short-term stability |
+| Day Trader | 5m-15m | 6-12h | Hours | Intraday trends |
+| Swing Trader | 1H-4H | 24-48h | Hours | Multi-day trends |
+| Position | 4H-D | 48-168h | Hours | Major trends only |
+
+### Optional: EMA Separation Check
+
+```pine
+trend_check_ema_separation = input.bool(true, "Require Increasing Separation")
+
+if trend_check_ema_separation and use_ema1 and use_ema2
+    check_bars_back = math.min(10, bullish_trend_bars)
+    if check_bars_back > 0
+        current_spacing = math.abs(ema1 - ema2)
+        past_spacing = math.abs(ema1[check_bars_back] - ema2[check_bars_back])
+        trend_emas_separating_long := current_spacing >= past_spacing * 0.95
+```
+
+**Purpose**: Filters out exhausted trends where EMAs are converging.
+
+---
+
+## 5. HTF Level Cooldown (v50)
+
+### Purpose
+Wait specified time after price interacts with 1H/4H levels to avoid choppy consolidation around major support/resistance.
+
+### Implementation Location
+- **Inputs**: Lines ~127-130 (HTF Filters)
+- **Logic**: Lines ~447-499 (HTF Cooldown Tracking)
+- **Integration**: Lines ~1015-1017
+
+### Code Pattern
+```pine
+// Track last interaction
+var int last_h1_interaction_bar = -99999
+var int last_h4_interaction_bar = -99999
+
+// Detect interaction
+h1_interaction = false
+if use_1h_filter
+    if htf_cooldown_interaction == "Touch"
+        h1_interaction := (low <= h1_ma and high >= h1_ma)
+    else  // "Cross"
+        h1_interaction := ta.cross(close, h1_ma)
+    
+    if h1_interaction
+        last_h1_interaction_bar := bar_index
+
+// Calculate elapsed time
+bars_since_h1_interaction = bar_index - last_h1_interaction_bar
+bars_per_hour_htf = timeframe.in_seconds() / 3600
+htf_cooldown_bars = int(htf_cooldown_hours / bars_per_hour_htf)
+
+// Check cooldown
+h1_cooldown_ok = bars_since_h1_interaction >= htf_cooldown_bars
+
+// Build combined cooldown
+htf_cooldown_ok = true
+if use_htf_cooldown
+    if use_1h_filter
+        htf_cooldown_ok := htf_cooldown_ok and h1_cooldown_ok
+    if use_4h_filter
+        htf_cooldown_ok := htf_cooldown_ok and h4_cooldown_ok
+```
+
+### Interaction Types
+
+**Touch Method (Recommended)**:
+- Triggers when wick touches level: `(low <= level and high >= level)`
+- Most conservative - catches all interactions
+- Best for avoiding all chop
+
+**Cross Method**:
+- Triggers when close crosses level: `ta.cross(close, level)`
+- More aggressive - only on full crosses
+- Allows quick bounces without triggering cooldown
+
+### Configuration by Market
+
+| Market Condition | Cooldown | Interaction | Rationale |
+|-----------------|----------|-------------|-----------|
+| Trending/Clean | 6-8h | Cross | Price respects levels |
+| Ranging/Choppy | 18-24h | Touch | Constant whipsaws |
+| High Volatility | 12-18h | Touch | Wild swings around levels |
+| Low Volatility | 6-12h | Cross | Crosses are significant |
+
+### Visual Feedback
+
+Info panel shows real-time status:
+```
+HTF Cooldown   │ READY ✓    (green - can enter)
+HTF Cooldown   │ WAIT ⏳    (orange - blocked)
+Time Left      │ 8.5h       (hours remaining)
+```
+
+### Reset Behavior
+
+**Important**: Cooldown timer **resets** on each new interaction:
+```
+10:00 - Touches 1H MA → Cooldown starts (12h)
+14:00 - Touches 1H MA again → Cooldown RESETS (12h from now)
+Result: Must wait 12h from LAST touch
+```
+
+This ensures clean moves away from levels before allowing entries.
+
+---
+
+## Feature Combinations
+
+### Conservative Quality Setup
+```pine
+Stop Method: EMA (EMA2)           // Wide stops
+Entry EMA: EMA2                    // Deeper pullbacks
+Cross Method: Close                // Full confirmation
+Trend Duration: 12 hours           // Established trends only
+HTF Cooldown: 12 hours             // Away from key levels
+Result: Fewer, higher quality trades
+```
+
+### Aggressive Scalping Setup
+```pine
+Stop Method: ATR (1.0x)           // Tight stops
+Entry EMA: EMA1                    // Quick entries
+Cross Method: Wick                 // Immediate on touch
+Trend Duration: OFF                // Take all setups
+HTF Cooldown: OFF or 3 hours       // Quick re-entries
+Result: Many trades, fast pace
+```
+
+### Balanced Swing Setup
+```pine
+Stop Method: EMA (EMA3)           // Medium-wide stops
+Entry EMA: EMA2                    // Balanced pullbacks
+Cross Method: Close                // Wait for confirmation
+Trend Duration: 12 hours           // Avoid early chop
+HTF Cooldown: 12 hours             // Standard buffer
+Result: Balanced trade frequency and quality
+```
+
+---
+
+## Visual Feedback Integration
+
+### Info Panel Structure
+
+All new features display status in the info panel:
+
+```pine
+// Entry configuration
+Entry EMA      │ EMA2         (which EMA triggers entries)
+Cross Method   │ Close        (confirmation method)
+Stop Method    │ EMA (EMA2)   (stop placement)
+
+// Time-based filters
+Trend Duration │ 72 bars (6.0h)  (current vs required)
+HTF Cooldown   │ READY ✓         (cooldown status)
+Time Left      │ 8.5h            (if in cooldown)
+```
+
+### Color Coding
+
+- 🟢 **Green**: Ready/Pass/Confirmed
+- 🟠 **Orange**: Waiting/Blocked/Warning
+- 🔴 **Red**: Failed/Invalid
+- ⚪ **Gray**: Disabled/Neutral
+
+### Symbols
+
+- ✓ Pass/Ready
+- ✗ Fail/Blocked
+- ⏳ Waiting/Cooldown
+- ↑ Rising/Bullish
+- ↓ Falling/Bearish
+
+---
+
+## Testing & Optimization
+
+### Test Matrix for New Features
+
+| Feature | Test 1 | Test 2 | Test 3 |
+|---------|--------|--------|--------|
+| **Stop EMA** | EMA1 (tight) | EMA2 (balanced) | EMA3 (wide) |
+| **Entry EMA** | EMA1 (fast) | EMA2 (balanced) | EMA3 (patient) |
+| **Cross Method** | Close (conservative) | Wick (aggressive) | Compare |
+| **Duration** | OFF | 6h | 12h | 24h |
+| **Cooldown** | OFF | 6h | 12h | 24h |
+
+### Optimization Process
+
+1. **Baseline**: Test with all features OFF
+2. **Individual**: Enable each feature separately, measure impact
+3. **Combinations**: Test logical combinations
+4. **Refinement**: Adjust parameters based on results
+
+### Key Metrics
+
+Track these for each configuration:
+- Total trades
+- Win rate
+- Average R-multiple
+- Max drawdown
+- Profit factor
+- Trades near HTF levels (for cooldown testing)
+- Trades during chop (for duration testing)
+
+---
+
+## Documentation Files
+
+Related documentation for these features:
+
+### Comprehensive Guides
+- [ENTRY_AND_STOP_OPTIONS_UPDATE.md](mdc:ENTRY_AND_STOP_OPTIONS_UPDATE.md) - v48 features
+- [TREND_DURATION_FILTER_GUIDE.md](mdc:TREND_DURATION_FILTER_GUIDE.md) - v49 feature
+- [HTF_COOLDOWN_GUIDE.md](mdc:HTF_COOLDOWN_GUIDE.md) - v50 feature
+
+### General Documentation
+- [FILTERS_GUIDE.md](mdc:FILTERS_GUIDE.md) - Complete filter reference
+- [MTF_EMA_STRATEGY_GUIDE.md](mdc:MTF_EMA_STRATEGY_GUIDE.md) - Full strategy guide
+
+---
+
+## Common Issues & Solutions
+
+### Issue: Trend Duration not working
+**Check**: Is it placed AFTER `bullish_alignment` is defined? (Line 645+)
+**Solution**: Move to correct location in code
+
+### Issue: HTF Cooldown never ready
+**Check**: Is at least one HTF filter (1H or 4H) enabled?
+**Solution**: Enable 1H or 4H filter first
+
+### Issue: Stop EMA on wrong side
+**Check**: Is selected EMA below entry for longs, above for shorts?
+**Solution**: Trade will be rejected (correct behavior), adjust EMA choice
+
+### Issue: Too many/few entries
+**Check**: Entry EMA and Cross Method combination
+**Solution**: 
+- Too many → Use deeper EMA (EMA2/3) or Close method
+- Too few → Use faster EMA (EMA1) or Wick method
+
+### Issue: Cooldown resets constantly
+**Check**: Interaction Type = "Touch" with price bouncing around level
+**Solution**: 
+- Switch to "Cross" method (less sensitive)
+- Increase cooldown hours
+- Wait for cleaner price action
+
+---
+
+## Best Practices
+
+1. **Start Conservative**: Use "Close" method and longer durations initially
+2. **One Change at a Time**: Test each feature individually
+3. **Document Results**: Keep notes on what works for your trading style
+4. **Respect Market Conditions**: Adjust settings for trending vs choppy periods
+5. **Use Visual Feedback**: Monitor info panel to understand filter behavior
+6. **Test Thoroughly**: Backtest before live trading
+7. **Combine Logically**: Don't use aggressive settings for all features simultaneously
+
+---
+
+## Version History
+
+- **v48** (Oct 27, 2025): EMA stops, selectable entry EMA, wick/close detection
+- **v49** (Oct 28, 2025): Trend duration filter
+- **v50** (Oct 28, 2025): HTF level cooldown
+
+Each version maintains backward compatibility - all new features disabled by default.

@@ -1,0 +1,517 @@
+//@version=6
+indicator("Advanced Trend Indicator", shorttitle="ATI", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+
+// Color Scheme
+colorScheme = input.string("Dark", title="Color Scheme", options=["Dark", "Light"])
+
+// Hull Suite Options
+hullSrc = input.source(close, title="Hull Source")
+hullMode = input.string("Hma", title="Hull Variation", options=["Hma", "Thma", "Ehma"])
+hullLength = input.int(55, title="Hull Length (180-200 for S/R, 55 for swing entry)")
+hullLengthMult = input.float(1.0, title="Hull Length Multiplier")
+hullUseHtf = input.bool(false, title="Show Hull from Higher Timeframe")
+hullHtf = input.timeframe("240", title="Hull Higher Timeframe")
+hullSwitchColor = input.bool(true, title="Color Hull by Trend")
+hullCandleCol = input.bool(false, title="Color Candles by Hull Trend")
+hullVisualSwitch = input.bool(true, title="Show Hull as Band")
+hullThickness = input.int(1, title="Hull Line Thickness")
+hullTransparency = input.int(40, title="Hull Band Transparency", step=5)
+
+// EMA/SMA Options
+maType1 = input.string("EMA", title="MA Type 1", options=["EMA", "SMA"], group="Moving Averages")
+maLength1 = input.int(50, title="MA Length 1", group="Moving Averages")
+maType2 = input.string("EMA", title="MA Type 2", options=["EMA", "SMA"], group="Moving Averages")
+maLength2 = input.int(200, title="MA Length 2", group="Moving Averages")
+maType3 = input.string("SMA", title="MA Type 3", options=["EMA", "SMA"], group="Moving Averages")
+maLength3 = input.int(100, title="MA Length 3", group="Moving Averages")
+
+// Multi-Timeframe Options
+showMA1HTF = input.bool(false, title="Show MA 1 Higher Timeframe", group="Multi-Timeframe")
+ma1HTF = input.timeframe("15", title="MA 1 HTF Timeframe", group="Multi-Timeframe")
+showMA2HTF = input.bool(false, title="Show MA 2 Higher Timeframe", group="Multi-Timeframe")
+ma2HTF = input.timeframe("15", title="MA 2 HTF Timeframe", group="Multi-Timeframe")
+showMA3HTF = input.bool(false, title="Show MA 3 Higher Timeframe", group="Multi-Timeframe")
+ma3HTF = input.timeframe("15", title="MA 3 HTF Timeframe", group="Multi-Timeframe")
+
+// Display Options
+showLabels = input.bool(true, title="Show Labels", group="Display")
+useIconMode = input.bool(false, title="Use Icons Instead of Labels (Cleaner View)", group="Display")
+showBand = input.bool(true, title="Show EMA Band Fill", group="Display")
+showHull = input.bool(true, title="Show Hull Suite", group="Display")
+showMA1 = input.bool(true, title="Show MA 1", group="Display")
+showMA2 = input.bool(true, title="Show MA 2", group="Display")
+showMA3 = input.bool(true, title="Show MA 3", group="Display")
+showAlertLabels = input.bool(true, title="Show Alert Labels (Backtesting)", group="Display")
+
+// RSI Options
+showRSI = input.bool(true, title="Show RSI", group="Technical Indicators")
+rsiLength = input.int(14, title="RSI Length", group="Technical Indicators")
+
+// MACD Options
+showMACD = input.bool(true, title="Show MACD", group="Technical Indicators")
+macdFast = input.int(12, title="MACD Fast Length", group="Technical Indicators")
+macdSlow = input.int(32, title="MACD Slow Length", group="Technical Indicators")
+macdSignal = input.int(20, title="MACD Signal Smoothing", group="Technical Indicators")
+
+// Alert Options
+showAlertHistory = input.bool(true, title="Show Alert History Table", group="Alerts")
+maxAlerts = input.int(10, title="Max Alert History", minval=1, maxval=20, group="Alerts")
+
+// Individual Alert Toggles
+enableAlert1 = input.bool(true, title="Enable Alert 1: Bullish Hull Cross (Price > Hull + MA1 > MA2)", group="Alert Toggles")
+enableAlert2 = input.bool(true, title="Enable Alert 2: Bearish Hull Cross (Price < Hull + MA1 < MA2)", group="Alert Toggles")
+enableAlert3 = input.bool(true, title="Enable Alert 3: Bullish MA Cross (Price > MA1 + MA1 > MA2)", group="Alert Toggles")
+enableAlert4 = input.bool(true, title="Enable Alert 4: Bearish MA Cross (Price < MA1 + MA1 < MA2)", group="Alert Toggles")
+
+// ============================================================================
+// CUSTOMIZATION OPTIONS
+// ============================================================================
+
+// MA Colors
+ma1Color = input.color(color.rgb(102, 182, 247), title="MA 1 Color", group="Customization")
+ma2Color = input.color(color.rgb(83, 181, 247), title="MA 2 Color", group="Customization")
+ma3Color = input.color(color.rgb(82, 85, 255), title="MA 3 Color", group="Customization")
+ma1HTFColor = input.color(color.rgb(255, 152, 0), title="MA 1 HTF Color", group="Customization")
+ma2HTFColor = input.color(color.rgb(255, 193, 7), title="MA 2 HTF Color", group="Customization")
+ma3HTFColor = input.color(color.rgb(255, 235, 59), title="MA 3 HTF Color", group="Customization")
+
+// MA Line Thickness
+ma1Thickness = input.int(2, title="MA 1 Line Thickness", minval=1, maxval=4, group="Customization")
+ma2Thickness = input.int(2, title="MA 2 Line Thickness", minval=1, maxval=4, group="Customization")
+ma3Thickness = input.int(2, title="MA 3 Line Thickness", minval=1, maxval=4, group="Customization")
+ma1HTFThickness = input.int(2, title="MA 1 HTF Line Thickness", minval=1, maxval=4, group="Customization")
+ma2HTFThickness = input.int(2, title="MA 2 HTF Line Thickness", minval=1, maxval=4, group="Customization")
+ma3HTFThickness = input.int(2, title="MA 3 HTF Line Thickness", minval=1, maxval=4, group="Customization")
+
+// Fill Colors
+bullishFillColor = input.color(color.new(color.green, 60), title="Bullish Fill Color", group="Customization")
+bearishFillColor = input.color(color.new(color.red, 60), title="Bearish Fill Color", group="Customization")
+
+// Hull Position Filter
+useHullFilter = input.bool(false, title="Filter Alerts by Hull Position", group="Hull Position Filter")
+hullFilterType = input.string("Price Above/Below Hull", title="Hull Filter Type", 
+     options=["Price Above/Below Hull", "MA1 Above/Below Hull", "MA2 Above/Below Hull", "MA3 Above/Below Hull"], 
+     group="Hull Position Filter")
+bullishHullCondition = input.string("Above Hull", title="Bullish Signals Only When", 
+     options=["Above Hull", "Below Hull"], group="Hull Position Filter")
+bearishHullCondition = input.string("Below Hull", title="Bearish Signals Only When", 
+     options=["Above Hull", "Below Hull"], group="Hull Position Filter")
+
+// RSI Filters
+useRSIFilter = input.bool(false, title="Filter Alerts by RSI", group="RSI Filters")
+bullishRSICondition = input.bool(true, title="Bullish Signals: RSI > 50", group="RSI Filters")
+bearishRSICondition = input.bool(true, title="Bearish Signals: RSI < 50", group="RSI Filters")
+
+// MACD Filters
+useMACDFilter = input.bool(false, title="Filter Alerts by MACD", group="MACD Filters")
+bullishMACDAboveZero = input.bool(false, title="Bullish Signals: MACD > 0", group="MACD Filters")
+bullishMACDAboveSignal = input.bool(true, title="Bullish Signals: MACD > Signal", group="MACD Filters")
+bearishMACDBelowZero = input.bool(false, title="Bearish Signals: MACD < 0", group="MACD Filters")
+bearishMACDBelowSignal = input.bool(true, title="Bearish Signals: MACD < Signal", group="MACD Filters")
+
+// ============================================================================
+// HULL SUITE FUNCTIONS
+// ============================================================================
+
+// HMA
+HMA(_src, _length) => ta.wma(2 * ta.wma(_src, _length / 2) - ta.wma(_src, _length), math.round(math.sqrt(_length)))
+
+// EHMA
+EHMA(_src, _length) => ta.ema(2 * ta.ema(_src, _length / 2) - ta.ema(_src, _length), math.round(math.sqrt(_length)))
+
+// THMA
+THMA(_src, _length) => ta.wma(ta.wma(_src, _length / 3) * 3 - ta.wma(_src, _length / 2) - ta.wma(_src, _length), _length)
+
+// Hull Mode Switch
+Mode(modeSwitch, src, len) =>
+    if modeSwitch == "Hma"
+        HMA(src, len)
+    else if modeSwitch == "Ehma"
+        EHMA(src, len)
+    else if modeSwitch == "Thma"
+        THMA(src, len/2)
+    else
+        na
+
+// ============================================================================
+// CALCULATIONS
+// ============================================================================
+
+// Hull Suite Calculations
+_hull = Mode(hullMode, hullSrc, int(hullLength * hullLengthMult))
+HULL = hullUseHtf ? request.security(syminfo.ticker, hullHtf, _hull) : _hull
+MHULL = HULL
+SHULL = HULL[2]
+
+// Current Timeframe Moving Averages
+ma1 = maType1 == "EMA" ? ta.ema(close, maLength1) : ta.sma(close, maLength1)
+ma2 = maType2 == "EMA" ? ta.ema(close, maLength2) : ta.sma(close, maLength2)
+ma3 = maType3 == "EMA" ? ta.ema(close, maLength3) : ta.sma(close, maLength3)
+
+// Higher Timeframe Moving Averages
+ma1HTFValue = maType1 == "EMA" ? ta.ema(close, maLength1) : ta.sma(close, maLength1)
+ma2HTFValue = maType2 == "EMA" ? ta.ema(close, maLength2) : ta.sma(close, maLength2)
+ma3HTFValue = maType3 == "EMA" ? ta.ema(close, maLength3) : ta.sma(close, maLength3)
+
+ma1HTFSeries = request.security(syminfo.tickerid, ma1HTF, ma1HTFValue)
+ma2HTFSeries = request.security(syminfo.tickerid, ma2HTF, ma2HTFValue)
+ma3HTFSeries = request.security(syminfo.tickerid, ma3HTF, ma3HTFValue)
+
+// RSI
+rsi = ta.rsi(close, rsiLength)
+
+// MACD
+[macdLine, signalLine, histLine] = ta.macd(close, macdFast, macdSlow, macdSignal)
+
+// ============================================================================
+// TREND CONDITIONS
+// ============================================================================
+
+// Hull Trend
+hullUpTrend = MHULL > SHULL
+hullDownTrend = MHULL < SHULL
+
+// MA Trend
+maUpTrend = ma1 > ma2
+maDownTrend = ma1 < ma2
+
+// Price vs MA
+priceAboveMA1 = close > ma1
+priceBelowMA1 = close < ma1
+
+// Price vs Hull
+priceAboveHull = close > MHULL
+priceBelowHull = close < MHULL
+
+// ============================================================================
+// CROSSOVER DETECTION
+// ============================================================================
+
+// Hull Crossovers
+hullBullCross = ta.crossover(MHULL, SHULL)
+hullBearCross = ta.crossover(SHULL, MHULL)
+
+// Price vs Hull Crossovers
+priceHullBullCross = ta.crossover(close, MHULL)
+priceHullBearCross = ta.crossover(MHULL, close)
+
+// Price vs MA Crossovers
+priceMABullCross = ta.crossover(close, ma1)
+priceMABearCross = ta.crossover(ma1, close)
+
+// ============================================================================
+// HULL POSITION FILTER LOGIC
+// ============================================================================
+
+// Determine what to compare against Hull based on filter type
+filterValue = switch hullFilterType
+    "Price Above/Below Hull" => close
+    "MA1 Above/Below Hull" => ma1
+    "MA2 Above/Below Hull" => ma2
+    "MA3 Above/Below Hull" => ma3
+    => close
+
+// Hull position conditions
+bullishHullPositionOK = not useHullFilter or (bullishHullCondition == "Above Hull" ? filterValue > MHULL : filterValue < MHULL)
+bearishHullPositionOK = not useHullFilter or (bearishHullCondition == "Above Hull" ? filterValue > MHULL : filterValue < MHULL)
+
+// RSI filter conditions (independent)
+bullishRSIOK = not useRSIFilter or (bullishRSICondition ? rsi > 50 : rsi <= 50)
+bearishRSIOK = not useRSIFilter or (bearishRSICondition ? rsi < 50 : rsi >= 50)
+
+// MACD filter conditions (independent)
+// For bullish: Check if MACD filter is disabled OR if any enabled MACD condition is met
+bullishMACDOK = not useMACDFilter or 
+     (bullishMACDAboveZero and macdLine > 0) or
+     (bullishMACDAboveSignal and macdLine > signalLine)
+
+// For bearish: Check if MACD filter is disabled OR if any enabled MACD condition is met  
+bearishMACDOK = not useMACDFilter or 
+     (bearishMACDBelowZero and macdLine < 0) or
+     (bearishMACDBelowSignal and macdLine < signalLine)
+
+// Combined RSI + MACD filter logic (independent combinations)
+bullishTechnicalOK = (not useRSIFilter and not useMACDFilter) or
+     (useRSIFilter and not useMACDFilter and bullishRSIOK) or
+     (not useRSIFilter and useMACDFilter and bullishMACDOK) or
+     (useRSIFilter and useMACDFilter and bullishRSIOK and bullishMACDOK)
+
+bearishTechnicalOK = (not useRSIFilter and not useMACDFilter) or
+     (useRSIFilter and not useMACDFilter and bearishRSIOK) or
+     (not useRSIFilter and useMACDFilter and bearishMACDOK) or
+     (useRSIFilter and useMACDFilter and bearishRSIOK and bearishMACDOK)
+
+// ============================================================================
+// ALERT CONDITIONS
+// ============================================================================
+
+// Alert 1: Price crosses above Hull AND MA1 > MA2 (with all filters and toggle)
+alert1Condition = enableAlert1 and priceHullBullCross and maUpTrend and bullishHullPositionOK and bullishTechnicalOK
+
+// Alert 2: Price crosses below Hull AND MA1 < MA2 (with all filters and toggle)
+alert2Condition = enableAlert2 and priceHullBearCross and maDownTrend and bearishHullPositionOK and bearishTechnicalOK
+
+// Alert 3: Price crosses above MA1 AND MA1 > MA2 (with all filters and toggle)
+alert3Condition = enableAlert3 and priceMABullCross and maUpTrend and bullishHullPositionOK and bullishTechnicalOK
+
+// Alert 4: Price crosses below MA1 AND MA1 < MA2 (with all filters and toggle)
+alert4Condition = enableAlert4 and priceMABearCross and maDownTrend and bearishHullPositionOK and bearishTechnicalOK
+
+// ============================================================================
+// COLORS
+// ============================================================================
+
+// Hull Colors
+hullColor = hullSwitchColor ? (hullUpTrend ? #00ff00 : #ff0000) : #ff9800
+
+// Label Color
+labelColor = colorScheme == "Dark" ? color.rgb(253, 253, 253, 40) : color.rgb(19, 10, 150, 40)
+
+// ============================================================================
+// PLOTTING
+// ============================================================================
+
+// Hull Suite Plotting
+hullPlot1 = plot(showHull ? MHULL : na, title="MHULL", color=color.new(hullColor, 50), linewidth=hullThickness)
+hullPlot2 = plot(showHull and hullVisualSwitch ? SHULL : na, title="SHULL", color=color.new(hullColor, 50), linewidth=hullThickness)
+fill(hullPlot1, hullPlot2, title="Hull Band", color=color.new(hullColor, hullTransparency))
+
+// Current Timeframe Moving Average Plotting
+ma1Plot = plot(showMA1 ? ma1 : na, title="MA 1", color=ma1Color, linewidth=ma1Thickness)
+ma2Plot = plot(showMA2 ? ma2 : na, title="MA 2", color=ma2Color, linewidth=ma2Thickness)
+ma3Plot = plot(showMA3 ? ma3 : na, title="MA 3", color=ma3Color, linewidth=ma3Thickness)
+
+// Higher Timeframe Moving Average Plotting
+ma1HTFPlot = plot(showMA1HTF ? ma1HTFSeries : na, title="MA 1 HTF", color=ma1HTFColor, linewidth=ma1HTFThickness, style=plot.style_cross)
+ma2HTFPlot = plot(showMA2HTF ? ma2HTFSeries : na, title="MA 2 HTF", color=ma2HTFColor, linewidth=ma2HTFThickness, style=plot.style_cross)
+ma3HTFPlot = plot(showMA3HTF ? ma3HTFSeries : na, title="MA 3 HTF", color=ma3HTFColor, linewidth=ma3HTFThickness, style=plot.style_cross)
+
+// Band Fill between MA1 and MA2
+fill(ma1Plot, ma2Plot, title="MA Band", color=showBand ? (maUpTrend ? bullishFillColor : bearishFillColor) : na)
+
+// Bar Coloring
+barcolor(color=hullCandleCol ? hullColor : na)
+
+// Alert Plotshapes for Better Visibility (only show when NOT in icon mode)
+plotshape(alert1Condition and showAlertLabels and not useIconMode, title="Bull Hull Alert", location=location.abovebar, style=shape.triangleup, color=color.green, size=size.small)
+plotshape(alert2Condition and showAlertLabels and not useIconMode, title="Bear Hull Alert", location=location.belowbar, style=shape.triangledown, color=color.red, size=size.small)
+plotshape(alert3Condition and showAlertLabels and not useIconMode, title="Bull MA Alert", location=location.abovebar, style=shape.diamond, color=color.lime, size=size.small)
+plotshape(alert4Condition and showAlertLabels and not useIconMode, title="Bear MA Alert", location=location.belowbar, style=shape.diamond, color=color.orange, size=size.small)
+
+// ============================================================================
+// LABELS AND ICONS
+// ============================================================================
+
+var label hullLabel = na
+var label ma1Label = na
+var label ma2Label = na
+var label ma3Label = na
+var label ma1HTFLabel = na
+var label ma2HTFLabel = na
+var label ma3HTFLabel = na
+
+// Alert Labels for Backtesting
+var label alert1Label = na
+var label alert2Label = na
+var label alert3Label = na
+var label alert4Label = na
+
+if barstate.islast
+    // Delete previous labels
+    if not na(hullLabel)
+        label.delete(hullLabel)
+    if not na(ma1Label)
+        label.delete(ma1Label)
+    if not na(ma2Label)
+        label.delete(ma2Label)
+    if not na(ma3Label)
+        label.delete(ma3Label)
+    if not na(ma1HTFLabel)
+        label.delete(ma1HTFLabel)
+    if not na(ma2HTFLabel)
+        label.delete(ma2HTFLabel)
+    if not na(ma3HTFLabel)
+        label.delete(ma3HTFLabel)
+    if not na(alert1Label)
+        label.delete(alert1Label)
+    if not na(alert2Label)
+        label.delete(alert2Label)
+    if not na(alert3Label)
+        label.delete(alert3Label)
+    if not na(alert4Label)
+        label.delete(alert4Label)
+    
+    // Create new labels or icons
+    if showHull and showLabels
+        if useIconMode
+            // Hull Icon - clean dot with buffer from price
+            hullOffset = (high - low) * 0.3  // 30% buffer from candle range
+            hullLabel := label.new(x=bar_index, y=MHULL + hullOffset, text="", xloc=xloc.bar_index, yloc=yloc.price, 
+                 textcolor=color.white, style=label.style_circle, color=hullColor, size=size.auto)
+        else
+            hullLabel := label.new(x=bar_index, y=MHULL, text="Hull " + hullMode, xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelColor, style=label.style_label_left, color=color.rgb(1,1,1,100))
+    
+    if showMA1 and showLabels
+        if useIconMode
+            // MA1 Icon - clean dot with buffer
+            ma1Offset = (high - low) * 0.2
+            ma1Label := label.new(x=bar_index, y=ma1 + ma1Offset, text="", xloc=xloc.bar_index, yloc=yloc.price, 
+                 textcolor=color.white, style=label.style_circle, color=ma1Color, size=size.auto)
+        else
+            ma1Label := label.new(x=bar_index, y=ma1, text=maType1 + str.tostring(maLength1), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelColor, style=label.style_label_left, color=color.rgb(1,1,1,100))
+    
+    if showMA2 and showLabels
+        if useIconMode
+            // MA2 Icon - clean dot with buffer
+            ma2Offset = (high - low) * 0.25
+            ma2Label := label.new(x=bar_index, y=ma2 + ma2Offset, text="", xloc=xloc.bar_index, yloc=yloc.price, 
+                 textcolor=color.white, style=label.style_circle, color=ma2Color, size=size.auto)
+        else
+            ma2Label := label.new(x=bar_index, y=ma2, text=maType2 + str.tostring(maLength2), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelColor, style=label.style_label_left, color=color.rgb(1,1,1,100))
+    
+    if showMA3 and showLabels
+        if useIconMode
+            // MA3 Icon - clean dot with buffer
+            ma3Offset = (high - low) * 0.35
+            ma3Label := label.new(x=bar_index, y=ma3 + ma3Offset, text="", xloc=xloc.bar_index, yloc=yloc.price, 
+                 textcolor=color.white, style=label.style_circle, color=ma3Color, size=size.auto)
+        else
+            ma3Label := label.new(x=bar_index, y=ma3, text=maType3 + str.tostring(maLength3), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelColor, style=label.style_label_left, color=color.rgb(1,1,1,100))
+    
+    // HTF MA Labels
+    if showMA1HTF and showLabels
+        if useIconMode
+            // MA1 HTF Icon - clean dot with buffer
+            ma1HTFOffset = (high - low) * 0.45
+            ma1HTFLabel := label.new(x=bar_index, y=ma1HTFSeries + ma1HTFOffset, text="", xloc=xloc.bar_index, yloc=yloc.price, 
+                 textcolor=color.white, style=label.style_circle, color=ma1HTFColor, size=size.auto)
+        else
+            ma1HTFLabel := label.new(x=bar_index, y=ma1HTFSeries, text="<----------------------" + ma1HTF + " " + maType1 + str.tostring(maLength1), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelColor, style=label.style_label_left, color=color.rgb(1,1,1,100))
+    
+    if showMA2HTF and showLabels
+        if useIconMode
+            // MA2 HTF Icon - clean dot with buffer
+            ma2HTFOffset = (high - low) * 0.5
+            ma2HTFLabel := label.new(x=bar_index, y=ma2HTFSeries + ma2HTFOffset, text="", xloc=xloc.bar_index, yloc=yloc.price, 
+                 textcolor=color.white, style=label.style_circle, color=ma2HTFColor, size=size.auto)
+        else
+            ma2HTFLabel := label.new(x=bar_index, y=ma2HTFSeries, text="<----------------------" + ma2HTF + " " + maType2 + str.tostring(maLength2), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelColor, style=label.style_label_left, color=color.rgb(1,1,1,100))
+    
+    if showMA3HTF and showLabels
+        if useIconMode
+            // MA3 HTF Icon - clean dot with buffer
+            ma3HTFOffset = (high - low) * 0.55
+            ma3HTFLabel := label.new(x=bar_index, y=ma3HTFSeries + ma3HTFOffset, text="", xloc=xloc.bar_index, yloc=yloc.price, 
+                 textcolor=color.white, style=label.style_circle, color=ma3HTFColor, size=size.auto)
+        else
+            ma3HTFLabel := label.new(x=bar_index, y=ma3HTFSeries, text="<----------------------" + ma3HTF + " " + maType3 + str.tostring(maLength3), xloc=xloc.bar_index, yloc=yloc.price, textcolor=labelColor, style=label.style_label_left, color=color.rgb(1,1,1,100))
+
+// Create Alert Labels or Icons for Backtesting
+if alert1Condition and showAlertLabels and useIconMode
+    // Bull Hull Icon - clean triangle with buffer above candle
+    alertOffset = (high - low) * 0.5
+    alert1Label := label.new(x=bar_index, y=high + alertOffset, text="", xloc=xloc.bar_index, yloc=yloc.price, textcolor=color.white, style=label.style_triangleup, color=color.green, size=size.auto)
+
+if alert2Condition and showAlertLabels and useIconMode
+    // Bear Hull Icon - clean triangle with buffer below candle
+    alertOffset = (high - low) * 0.5
+    alert2Label := label.new(x=bar_index, y=low - alertOffset, text="", xloc=xloc.bar_index, yloc=yloc.price, textcolor=color.white, style=label.style_triangledown, color=color.red, size=size.auto)
+
+if alert3Condition and showAlertLabels and useIconMode
+    // Bull MA Icon - clean diamond with buffer above candle
+    alertOffset = (high - low) * 0.4
+    alert3Label := label.new(x=bar_index, y=high + alertOffset, text="", xloc=xloc.bar_index, yloc=yloc.price, textcolor=color.white, style=label.style_diamond, color=color.lime, size=size.auto)
+
+if alert4Condition and showAlertLabels and useIconMode
+    // Bear MA Icon - clean diamond with buffer below candle
+    alertOffset = (high - low) * 0.4
+    alert4Label := label.new(x=bar_index, y=low - alertOffset, text="", xloc=xloc.bar_index, yloc=yloc.price, textcolor=color.white, style=label.style_diamond, color=color.orange, size=size.auto)
+
+// Create regular alert labels when NOT in icon mode
+if alert1Condition and showAlertLabels and not useIconMode
+    alert1Label := label.new(x=bar_index, y=high, text="BULL HULL\nRSI: " + str.tostring(rsi, "#.#") + "\nMACD: " + str.tostring(macdLine, "#.##"), xloc=xloc.bar_index, yloc=yloc.price, textcolor=color.white, style=label.style_label_down, color=color.green, size=size.small)
+
+if alert2Condition and showAlertLabels and not useIconMode
+    alert2Label := label.new(x=bar_index, y=low, text="BEAR HULL\nRSI: " + str.tostring(rsi, "#.#") + "\nMACD: " + str.tostring(macdLine, "#.##"), xloc=xloc.bar_index, yloc=yloc.price, textcolor=color.white, style=label.style_label_up, color=color.red, size=size.small)
+
+if alert3Condition and showAlertLabels and not useIconMode
+    alert3Label := label.new(x=bar_index, y=high, text="BULL MA\nRSI: " + str.tostring(rsi, "#.#") + "\nMACD: " + str.tostring(macdLine, "#.##"), xloc=xloc.bar_index, yloc=yloc.price, textcolor=color.white, style=label.style_label_down, color=color.lime, size=size.small)
+
+if alert4Condition and showAlertLabels and not useIconMode
+    alert4Label := label.new(x=bar_index, y=low, text="BEAR MA\nRSI: " + str.tostring(rsi, "#.#") + "\nMACD: " + str.tostring(macdLine, "#.##"), xloc=xloc.bar_index, yloc=yloc.price, textcolor=color.white, style=label.style_label_up, color=color.orange, size=size.small)
+
+// ============================================================================
+// ALERT HISTORY TABLE
+// ============================================================================
+
+// Alert History Storage
+var array<string> alertHistory = array.new<string>()
+var table alertTable = na
+
+// Function to add alert to history
+addAlertToHistory(message) =>
+    if array.size(alertHistory) >= maxAlerts
+        array.shift(alertHistory)
+    array.push(alertHistory, message)
+
+// Initialize table if needed
+if showAlertHistory and barstate.islast and na(alertTable)
+    alertTable := table.new(position.top_right, 2, maxAlerts + 1, bgcolor=color.rgb(0, 8, 11, 77), frame_color=color.green, frame_width=1, border_color=color.white, border_width=1)
+
+// Update alert table
+if showAlertHistory and barstate.islast and not na(alertTable)
+    // Clear table
+    table.clear(alertTable, 0, 0, 1, maxAlerts)
+    
+    // Headers
+    table.cell(alertTable, 0, 0, "Time", text_size=size.small, text_color=color.white)
+    table.cell(alertTable, 1, 0, "Alert Details", text_size=size.small, text_color=color.white)
+    
+    // Alert rows
+    for i = 0 to math.min(array.size(alertHistory) - 1, maxAlerts - 1)
+        alertText = array.get(alertHistory, array.size(alertHistory) - 1 - i)
+        table.cell(alertTable, 0, i + 1, str.tostring(i + 1), text_size=size.tiny, text_color=color.white)
+        table.cell(alertTable, 1, i + 1, alertText, text_size=size.tiny, text_color=color.white)
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+
+// Alert 1: Price crosses above Hull AND MA1 > MA2
+if alert1Condition
+    alertMessage = "BULLISH: Price crossed above Hull" + "\nRSI: " + str.tostring(rsi, "#.##") + "\nMACD: " + str.tostring(macdLine, "#.####") + "\nSignal: " + str.tostring(signalLine, "#.####")
+    alert(alertMessage, freq=alert.freq_once_per_bar_close)
+    addAlertToHistory("Bull Hull Cross - RSI:" + str.tostring(rsi, "#.#") + " MACD:" + str.tostring(macdLine, "#.##"))
+
+// Alert 2: Price crosses below Hull AND MA1 < MA2
+if alert2Condition
+    alertMessage = "BEARISH: Price crossed below Hull" + "\nRSI: " + str.tostring(rsi, "#.##") + "\nMACD: " + str.tostring(macdLine, "#.####") + "\nSignal: " + str.tostring(signalLine, "#.####")
+    alert(alertMessage, freq=alert.freq_once_per_bar_close)
+    addAlertToHistory("Bear Hull Cross - RSI:" + str.tostring(rsi, "#.#") + " MACD:" + str.tostring(macdLine, "#.##"))
+
+// Alert 3: Price crosses above MA1 AND MA1 > MA2
+if alert3Condition
+    alertMessage = "BULLISH: Price crossed above " + maType1 + str.tostring(maLength1) + "\nRSI: " + str.tostring(rsi, "#.##") + "\nMACD: " + str.tostring(macdLine, "#.####") + "\nSignal: " + str.tostring(signalLine, "#.####")
+    alert(alertMessage, freq=alert.freq_once_per_bar_close)
+    addAlertToHistory("Bull MA Cross - RSI:" + str.tostring(rsi, "#.#") + " MACD:" + str.tostring(macdLine, "#.##"))
+
+// Alert 4: Price crosses below MA1 AND MA1 < MA2
+if alert4Condition
+    alertMessage = "BEARISH: Price crossed below " + maType1 + str.tostring(maLength1) + "\nRSI: " + str.tostring(rsi, "#.##") + "\nMACD: " + str.tostring(macdLine, "#.####") + "\nSignal: " + str.tostring(signalLine, "#.####")
+    alert(alertMessage, freq=alert.freq_once_per_bar_close)
+    addAlertToHistory("Bear MA Cross - RSI:" + str.tostring(rsi, "#.#") + " MACD:" + str.tostring(macdLine, "#.##"))
+
+// Update alert table
+
+// ============================================================================
+// ALERT CONDITIONS FOR EXTERNAL USE
+// ============================================================================
+
+alertcondition(alert1Condition, title="Bullish Hull Cross", message="Price crossed above Hull with MA alignment")
+alertcondition(alert2Condition, title="Bearish Hull Cross", message="Price crossed below Hull with MA alignment")
+alertcondition(alert3Condition, title="Bullish MA Cross", message="Price crossed above MA with MA alignment")
+alertcondition(alert4Condition, title="Bearish MA Cross", message="Price crossed below MA with MA alignment")

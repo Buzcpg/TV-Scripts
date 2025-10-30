@@ -1,0 +1,645 @@
+---
+description: Architecture and design patterns for the filter system in Pine Script strategies
+---
+
+# Filter System Architecture
+
+## Core Design Pattern
+
+The filter system uses a **modular, additive filtering approach** where all filters must pass for an entry signal.
+
+### Filter Flow
+
+```
+Entry Signal Evaluation:
+1. Core filters (always active) ✓
+   - EMA alignment
+   - Retest entry detection
+   - Stop distance validation
+2. Optional filters (if enabled) ✓
+   - HTF directional filters
+   - Momentum filters
+   - Time-based filters
+3. Combine with AND logic
+4. Trigger entry if ALL pass
+```
+
+## Implementation Pattern
+
+### 1. Input Definition
+
+All optional filters follow this pattern:
+
+```pine
+grp_filter = "═══ Filter Name ═══"
+use_filter = input.bool(false, "Enable Filter", group=grp_filter, 
+    tooltip="What this filter does and why you'd use it")
+filter_param1 = input.int(14, "Parameter 1", minval=1, group=grp_filter,
+    tooltip="Specific parameter explanation")
+filter_param2 = input.float(50, "Parameter 2", group=grp_filter,
+    tooltip="What this controls")
+```
+
+**Rules**:
+- ✅ Default to `false` (OFF) - non-destructive design
+- ✅ Group all related settings together
+- ✅ Include descriptive tooltips explaining use case
+- ✅ Set reasonable min/max values
+- ✅ Use clear, consistent naming (e.g., `use_`, `_filter`, `_ok`)
+
+### 2. Calculation Phase
+
+Calculate indicator values and build conditions:
+
+```pine
+// Calculate the indicator
+filter_value = ta.rsi(close, filter_length)
+
+// Build directional conditions
+filter_long_ok = filter_value >= min_threshold and filter_value <= max_threshold
+filter_short_ok = filter_value >= min_threshold and filter_value <= max_threshold
+
+// Or with separate long/short logic
+filter_long_ok = filter_value > threshold_long
+filter_short_ok = filter_value < threshold_short
+```
+
+**Rules**:
+- ✅ Always create both `_long_ok` and `_short_ok` conditions
+- ✅ Use descriptive variable names
+- ✅ Handle NA values appropriately
+- ✅ Calculate once, use everywhere (efficiency)
+- ✅ Place calculations in logical order (dependencies first)
+
+### 3. Integration Phase
+
+Add to the combined filter logic:
+
+```pine
+// Apply additional filters (only if enabled)
+bool additional_filters_long = true
+bool additional_filters_short = true
+
+if use_filter1
+    additional_filters_long := additional_filters_long and filter1_long_ok
+    additional_filters_short := additional_filters_short and filter1_short_ok
+
+if use_filter2
+    additional_filters_long := additional_filters_long and filter2_long_ok
+    additional_filters_short := additional_filters_short and filter2_short_ok
+
+// Entry conditions check all filters
+if strategy.position_size == 0
+    can_enter_long := core_conditions and htf_filters and additional_filters_long
+    can_enter_short := core_conditions and htf_filters and additional_filters_short
+```
+
+**Rules**:
+- ✅ Only apply if filter enabled (`if use_filter`)
+- ✅ Use AND logic (all must pass)
+- ✅ Separate long/short filter chains
+- ✅ Keep integration section organized by filter type
+- ✅ Check filter state before applying logic
+
+## Filter Categories
+
+### Core Filters (Always Active)
+Never have enable/disable toggle - these define the strategy:
+
+```pine
+// No toggle, directly used in entry logic
+bullish_trend = ema1 > ema2 and ema2 > ema3
+had_long_retest = price_crossed_below_then_above
+stop_valid = stop_distance >= min and stop_distance <= max
+
+can_enter_long = bullish_trend and had_long_retest and stop_valid
+```
+
+**Examples in strategy**:
+- EMA alignment (defines trend)
+- Retest entry signal (defines entry timing)
+- Stop distance validation (risk management)
+
+### Optional Filters (User Controlled)
+Always have enable toggle and respect it:
+
+```pine
+use_optional_filter = input.bool(false, "Enable Optional Filter", ...)
+
+// Calculate regardless of toggle (Pine Script efficiency)
+optional_filter_value = ta.rsi(close, 14)
+optional_filter_ok = optional_filter_value > 50
+
+// Only apply if enabled
+if use_optional_filter
+    additional_filters := additional_filters and optional_filter_ok
+```
+
+**Examples in strategy**:
+- CVD, RSI, MACD filters
+- Orderflow, Volatility filters
+- Trend duration filter
+- HTF level cooldown
+
+### Time-Based Filters (Special Category)
+
+Track time/bars and apply cooldowns:
+
+```pine
+// Track events
+var int last_event_bar = -99999
+if event_occurs
+    last_event_bar := bar_index
+
+// Calculate elapsed time
+bars_since_event = bar_index - last_event_bar
+bars_per_hour = timeframe.in_seconds() / 3600
+hours_since_event = bars_since_event * bars_per_hour
+
+// Apply cooldown
+cooldown_ok = hours_since_event >= required_hours
+```
+
+**Examples in strategy**:
+- Trend duration filter (tracks consecutive aligned bars)
+- HTF cooldown filter (tracks time since level interaction)
+
+## Multi-Timeframe Filter Pattern
+
+For HTF analysis, use this pattern:
+
+```pine
+// 1. Input for timeframe selection
+htf_timeframe = input.string("60", "HTF Timeframe", 
+    options=["15", "30", "60", "240", "D"],
+    tooltip="Higher timeframe for analysis")
+
+// 2. Request HTF data (single value)
+htf_value = request.security(syminfo.tickerid, htf_timeframe,
+    ta.atr(length),
+    gaps=barmerge.gaps_off,
+    lookahead=barmerge.lookahead_off)
+
+// 3. Request multiple values (tuple syntax)
+[htf_open, htf_close, htf_high, htf_low, htf_volume] = request.security(
+    syminfo.tickerid, htf_timeframe,
+    [open, close, high, low, volume],
+    gaps=barmerge.gaps_off,
+    lookahead=barmerge.lookahead_off)
+
+// 4. Analyze HTF data on current timeframe
+// Loop through series history (NOT in request.security call)
+for i = 0 to lookback - 1
+    bar_data = htf_close[i]  // Access historical values
+    // ... analysis
+
+// 5. Use in filter logic
+filter_ok = current_tf_condition and htf_condition
+```
+
+**Critical Rules**:
+- ✅ Always use `gaps=barmerge.gaps_off` for continuous data
+- ✅ Always use `lookahead=barmerge.lookahead_off` to prevent future leak
+- ✅ HTF values only update when HTF bar completes (intended behavior)
+- ✅ Request data ONCE, then loop through series history
+- ❌ **NEVER** use loop variables inside `request.security()` calls
+
+**Anti-Pattern (Will Fail)**:
+```pine
+// ❌ BAD - loop variable in request.security()
+for i = 0 to lookback - 1
+    bar_data = request.security(syminfo.tickerid, htf_tf, close[i], ...)
+```
+
+**Correct Pattern**:
+```pine
+// ✅ GOOD - request once, loop through series
+htf_close = request.security(syminfo.tickerid, htf_tf, close, ...)
+for i = 0 to lookback - 1
+    bar_data = htf_close[i]
+```
+
+## Complex Filter Pattern (Multiple Requirements)
+
+For filters with multiple optional requirements:
+
+```pine
+// Inputs
+use_filter = input.bool(false, "Enable Filter")
+require_condition_a = input.bool(true, "Require Condition A")
+require_condition_b = input.bool(true, "Require Condition B")
+require_condition_c = input.bool(false, "Require Condition C")
+
+// Calculations
+condition_a = calculation_a()
+condition_b = calculation_b()
+condition_c = calculation_c()
+
+// Build combined condition
+filter_ok = true  // Start optimistic
+
+if require_condition_a
+    filter_ok := filter_ok and condition_a
+
+if require_condition_b
+    filter_ok := filter_ok and condition_b
+
+if require_condition_c
+    filter_ok := filter_ok and condition_c
+
+// Integration
+if use_filter
+    additional_filters := additional_filters and filter_ok
+```
+
+This allows granular control - user can enable filter but customize which sub-conditions apply.
+
+**Example**: CVD filter with optional positive/rising requirements for longs.
+
+## Tracking & Cooldown Pattern (New v49-v50)
+
+For features that track time or events:
+
+```pine
+// 1. Track state with var
+var int tracking_counter = 0
+var int last_event_bar = -99999
+
+// 2. Update on events
+if condition_met
+    tracking_counter := tracking_counter + 1
+else
+    tracking_counter := 0
+
+if specific_event
+    last_event_bar := bar_index
+
+// 3. Calculate elapsed time
+bars_since_event = bar_index - last_event_bar
+
+// Convert to hours
+get_bars_per_hour() =>
+    timeframe_minutes = timeframe.in_seconds() / 60
+    bars_per_hour = 60 / timeframe_minutes
+    bars_per_hour
+
+hours_since_event = bars_since_event / get_bars_per_hour()
+
+// 4. Apply threshold
+duration_ok = tracking_counter >= min_required_bars
+cooldown_ok = hours_since_event >= min_required_hours
+
+// 5. Integrate
+if use_duration_filter
+    filters := filters and duration_ok
+
+if use_cooldown_filter
+    filters := filters and cooldown_ok
+```
+
+**Examples**:
+- **Trend Duration**: Tracks consecutive bars with EMA alignment
+- **HTF Cooldown**: Tracks time since price touched HTF level
+
+## Variable Order Dependencies
+
+**Critical**: Some calculations depend on others being defined first.
+
+### Correct Order:
+
+1. **EMAs first**:
+```pine
+ema1 = ta.ema(close, ema1_length)
+ema2 = ta.ema(close, ema2_length)
+```
+
+2. **Alignment checks second**:
+```pine
+bullish_alignment = ema1 > ema2 and ema2 > ema3
+bearish_alignment = ema1 < ema2 and ema2 < ema3
+```
+
+3. **Trend determination third**:
+```pine
+bullish_trend = require_all_emas_aligned ? bullish_alignment : basic_bullish
+bearish_trend = require_all_emas_aligned ? bearish_alignment : basic_bearish
+```
+
+4. **Time-based filters fourth** (use alignment/trend):
+```pine
+// NOW safe to use bullish_alignment
+if bullish_alignment
+    bullish_trend_bars := bullish_trend_bars + 1
+```
+
+5. **HTF data request** (before HTF filters):
+```pine
+h1_ma = request.security(..., "60", ...)
+```
+
+6. **HTF cooldown tracking** (after HTF data):
+```pine
+h1_interaction = (low <= h1_ma and high >= h1_ma)
+```
+
+**Anti-Pattern**:
+```pine
+// ❌ BAD - using bullish_alignment before it's defined
+if bullish_alignment  // ERROR: not defined yet!
+    counter += 1
+
+// ... (later)
+bullish_alignment = ema1 > ema2  // Defined too late!
+```
+
+## Visual Feedback Pattern
+
+For indicators panel integration:
+
+```pine
+if show_indicators_panel and barstate.islast
+    var table filter_table = table.new(position.middle_right, 2, rows, 
+        bgcolor=color.new(color.black, 10),
+        frame_color=color.new(color.blue, 50),
+        frame_width=2,
+        border_width=1)
+    
+    row = 0
+    
+    // Header
+    table.cell(filter_table, 0, row, "FILTER NAME", 
+        text_color=color.gray, 
+        text_size=size.tiny,
+        bgcolor=color.new(color.gray, 80))
+    table.cell(filter_table, 1, row, 
+        use_filter ? "ENABLED" : "OFF",
+        text_color=use_filter ? color.green : color.gray,
+        text_size=size.tiny,
+        bgcolor=color.new(color.gray, 80))
+    row := row + 1
+    
+    // Value display (if filter enabled)
+    if use_filter
+        table.cell(filter_table, 0, row, "Value")
+        value_color = filter_value > threshold ? color.green : color.red
+        table.cell(filter_table, 1, row, 
+            str.tostring(filter_value, "#.##"),
+            text_color=value_color,
+            text_size=size.small,
+            text_font_family=font.family_monospace)
+        row := row + 1
+        
+        // Status display
+        table.cell(filter_table, 0, row, "Status")
+        status_text = filter_ok ? "READY ✓" : "WAIT ⏳"
+        status_color = filter_ok ? color.green : color.orange
+        table.cell(filter_table, 1, row, status_text, 
+            text_color=status_color,
+            text_size=size.tiny)
+        row := row + 1
+        
+        // Countdown (for cooldowns)
+        if not filter_ok and time_remaining > 0
+            table.cell(filter_table, 0, row, "Time Left")
+            table.cell(filter_table, 1, row, 
+                str.tostring(time_remaining, "#.#") + "h",
+                text_color=color.orange,
+                text_size=size.tiny)
+            row := row + 1
+```
+
+**Display Guidelines**:
+- Show enabled/disabled status in header
+- Show current values (color-coded)
+- Show pass/fail status with symbols
+- Show time remaining for cooldowns
+- Use consistent symbols: ✓ ✗ ⏳ ↑ ↓
+- Color code: 🟢 green=ready/pass, 🟠 orange=wait/blocked, 🔴 red=fail, ⚪ gray=disabled
+
+## Filter Dependencies
+
+Some filters depend on others:
+
+```pine
+// Parent filter
+use_htf_filter = input.bool(false, "Enable HTF Filter")
+
+// Child filter (only works if parent enabled)
+use_ema_ordering = input.bool(false, "Enable EMA Ordering Filter",
+    tooltip="Requires HTF filter to be enabled")
+
+// Implementation with dependency check
+if use_ema_ordering and (use_1h_filter or use_4h_filter)
+    // Filter logic only runs if parent filter enabled
+    float htf_reference = use_1h_filter ? h1_ma : h4_ema
+    // ... ordering checks
+else
+    // Default to passing if dependencies not met
+    ema_order_filter_long := true
+    ema_order_filter_short := true
+```
+
+**Examples**:
+- EMA Ordering Filter requires HTF Filter (1H or 4H) to be enabled
+- HTF Cooldown requires at least one HTF filter enabled
+
+Document dependencies in tooltips and documentation.
+
+## Performance Considerations
+
+### Efficient Calculations
+
+```pine
+// ✅ GOOD: Calculate once, check toggle during integration
+rsi_value = ta.rsi(close, 14)  // Always calculated
+rsi_ok = rsi_value > 40 and rsi_value < 70
+
+if use_rsi_filter
+    filters := filters and rsi_ok  // Only integrated if enabled
+
+// Pine Script calculates efficiently regardless
+```
+
+### Array Operations
+
+For filters using arrays (like volatility percentile):
+
+```pine
+var array<float> history = array.new<float>(0)
+
+// Update only on confirmed bars
+if barstate.isconfirmed
+    array.push(history, current_value)
+    if array.size(history) > max_size
+        array.shift(history)  // Remove oldest, keep size bounded
+
+// Analysis (check minimum data available)
+if array.size(history) >= min_required
+    // Perform calculations
+    sorted = array.copy(history)
+    array.sort(sorted, order.ascending)
+    // ... percentile calculation
+```
+
+### Bar State Management
+
+```pine
+// Update tracking on confirmed bars only
+if barstate.isconfirmed and condition
+    counter := counter + 1
+
+// Use current bar state for real-time display
+if show_panel and barstate.islast
+    // Display current values
+```
+
+## Testing New Filters
+
+### Validation Checklist
+
+- [ ] Filter disabled by default (`false`)
+- [ ] Both `_long_ok` and `_short_ok` conditions created
+- [ ] Integrated into `additional_filters_long` and `additional_filters_short`
+- [ ] Input settings have clear, helpful tooltips
+- [ ] Handles NA values gracefully
+- [ ] Respects dependencies (if any)
+- [ ] Added to indicators panel (if applicable)
+- [ ] Documented in all three FILTERS_*.md files
+- [ ] Tested on trending market period
+- [ ] Tested on ranging/choppy market period
+- [ ] Tested with different timeframes
+- [ ] Version number incremented
+
+### Debug Pattern
+
+To debug why filter is failing:
+
+```pine
+show_debug_labels = input.bool(false, "Show Debug Labels", group="Visual")
+
+if show_debug_labels and use_filter
+    debug_text = "Filter Debug:\n"
+    debug_text := debug_text + "Value: " + str.tostring(filter_value, "#.##") + "\n"
+    debug_text := debug_text + "Threshold: " + str.tostring(threshold) + "\n"
+    debug_text := debug_text + "Long OK: " + (filter_long_ok ? "✓" : "✗") + "\n"
+    debug_text := debug_text + "Short OK: " + (filter_short_ok ? "✓" : "✗")
+    
+    label.new(bar_index, high, debug_text,
+        color=filter_ok ? color.new(color.green, 0) : color.new(color.red, 0),
+        textcolor=color.white,
+        style=label.style_label_down,
+        size=size.small)
+```
+
+Enable with `show_debug_labels` input toggle during development.
+
+## Common Patterns
+
+### Threshold Comparison
+```pine
+value > threshold  // Simple greater than
+value >= min and value <= max  // Range check
+math.abs(value) > threshold  // Absolute value
+```
+
+### Direction Detection
+```pine
+current_value > previous_value  // Rising
+current_value > value[lookback]  // Rising over N bars
+ta.crossover(fast, slow)  // Crossover detection
+ta.cross(price, level)  // Bi-directional cross
+```
+
+### Multi-Condition Aggregation
+```pine
+condition_1 and condition_2 and condition_3  // All must pass (AND)
+condition_1 or condition_2  // Any can pass (OR) - rare in this strategy
+not condition  // Inversion
+```
+
+### Percentage Calculation
+```pine
+pct = math.abs((value1 - value2) / value2 * 100)
+pct >= threshold_pct  // Compare to percentage threshold
+```
+
+### Touch Detection
+```pine
+// Price touched level from above
+touched_from_above = low <= level and close > level
+
+// Price touched level from below
+touched_from_below = high >= level and close < level
+
+// Price touched level (any direction)
+touched = (low <= level and high >= level)
+```
+
+## Error Prevention
+
+### Handle NA Values
+```pine
+// ✅ GOOD: Check for NA first
+filter_ok = not na(value) and value > threshold
+
+// ❌ BAD: Will fail if value is NA
+filter_ok = value > threshold
+```
+
+### Validate Dependencies
+```pine
+// ✅ GOOD: Check if required data exists
+if use_pivot_stop and not na(last_pivot_low)
+    stop = last_pivot_low
+else
+    stop = na  // Or use fallback
+
+// ❌ BAD: Assume data exists
+stop = last_pivot_low  // Will be NA if no pivot found
+```
+
+### Division by Zero
+```pine
+// ✅ GOOD: Check denominator
+pct = denominator != 0 ? (numerator / denominator * 100) : 0
+
+// ❌ BAD: Can crash
+pct = numerator / denominator * 100
+```
+
+### Variable Initialization
+```pine
+// ✅ GOOD: Initialize with appropriate type
+bool filter_ok = false
+int counter = 0
+float value = 0.0
+
+// ❌ BAD: Bool can't be NA in v6
+bool filter_ok = na  // Compilation error
+```
+
+## Summary
+
+**Filter System Goals**:
+1. **Non-destructive**: Disabled by default, strategy works immediately
+2. **Modular**: Independent filters, each serves specific purpose
+3. **Composable**: Combine any filters without conflicts
+4. **Visual**: Show real-time status in panels
+5. **Documented**: Explain purpose and usage thoroughly
+
+**Development Flow**:
+1. Define inputs (disabled by default, grouped, with tooltips)
+2. Calculate values (respect dependencies, handle NA)
+3. Build conditions (both long and short)
+4. Integrate with AND logic (if enabled)
+5. Add visual feedback (status, values, countdowns)
+6. Document thoroughly (all three docs + dedicated guide if major)
+7. Test extensively (trending, choppy, different timeframes)
+8. Increment version
+
+**Key Principles**:
+- Calculate efficiently, integrate conditionally
+- Separate concerns (calculation vs integration)
+- Provide visual feedback
+- Handle edge cases gracefully
+- Document for users, not just developers

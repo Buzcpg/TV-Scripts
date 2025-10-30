@@ -1,0 +1,2295 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+//
+// MTF EMA TREND INDICATOR
+// ========================
+// Multi-timeframe EMA alignment indicator with comprehensive filtering system
+//
+// CONCEPT:
+// - Uses 4 manually configured EMAs (default: 50, 200, 250, 1000)
+// - Generates signals on retest and cross of EMA1 when all EMAs are aligned
+// - Advanced filtering system with CVD, RSI, MACD, Orderflow, Volatility filters
+// - HTF directional bias and EMA ordering filters
+// - Trend duration anti-chop protection
+// - Post-trade cooldown periods
+//
+//v64 - 281025 - added "Persistent Retest Mode" option: retest flag stays active until entry/trend loss, allowing conditions to improve (pre-v57 behavior)
+//v65 - 291025 - CONVERTED TO INDICATOR: removed all strategy execution, now generates signals only with simulated position tracking
+
+//@version=6
+indicator("MTF EMA Trend Indicator", "EMA Trend+", overlay=true)
+
+// ========================================
+// INPUT SETTINGS
+// ========================================
+
+// EMA Settings
+grp_ema = "═══ EMA Settings ═══"
+use_ema1 = input.bool(true, "Enable EMA 1", group=grp_ema, tooltip="Toggle EMA1 on/off")
+ema1_length = input.int(50, "EMA 1 (LTF Fast)", minval=1, group=grp_ema, tooltip="First EMA - typically LTF fast (e.g., 50)")
+use_ema2 = input.bool(true, "Enable EMA 2", group=grp_ema, tooltip="Toggle EMA2 on/off")
+ema2_length = input.int(100, "EMA 2 (LTF Slow)", minval=1, group=grp_ema, tooltip="Second EMA - typically LTF slow (e.g., 200)")
+use_ema3 = input.bool(true, "Enable EMA 3", group=grp_ema, tooltip="Toggle EMA3 on/off")
+ema3_length = input.int(200, "EMA 3 (HTF Fast)", minval=1, group=grp_ema, tooltip="Third EMA - typically HTF fast (e.g., 250 for 1m/5m or 150 for 5m/15m)")
+use_ema4 = input.bool(true, "Enable EMA 4", group=grp_ema, tooltip="Toggle EMA4 on/off")
+ema4_length = input.int(1000, "EMA 4 (HTF Slow)", minval=1, group=grp_ema, tooltip="Fourth EMA - typically HTF slow (e.g., 1000 for 1m/5m or 600 for 5m/15m)")
+require_all_emas_aligned = input.bool(true, "Require All Enabled EMAs Aligned", group=grp_ema, tooltip="All enabled EMAs must be in order for trend confirmation")
+
+// EMA Spacing Checks (configurable pairs)
+spacing_check_1_from = input.string("EMA1", "Spacing Check 1: From", group=grp_ema, options=["EMA1", "EMA2", "EMA3", "EMA4"], tooltip="First EMA for spacing measurement")
+spacing_check_1_to = input.string("EMA2", "Spacing Check 1: To", group=grp_ema, options=["EMA1", "EMA2", "EMA3", "EMA4"], tooltip="Second EMA for spacing measurement")
+min_spacing_1 = input.float(0.1, "Min Spacing 1 (%)", minval=0, step=0.05, group=grp_ema, tooltip="Minimum distance between selected EMAs")
+
+spacing_check_2_from = input.string("EMA3", "Spacing Check 2: From", group=grp_ema, options=["EMA1", "EMA2", "EMA3", "EMA4"], tooltip="First EMA for second spacing check")
+spacing_check_2_to = input.string("EMA4", "Spacing Check 2: To", group=grp_ema, options=["EMA1", "EMA2", "EMA3", "EMA4"], tooltip="Second EMA for second spacing check")
+min_spacing_2 = input.float(0.1, "Min Spacing 2 (%)", minval=0, step=0.05, group=grp_ema, tooltip="Minimum distance between selected EMAs")
+
+// Stop Loss Settings
+grp_sl = "═══ Stop Loss Settings ═══"
+stop_loss_method = input.string("Pivot", "Stop Loss Method", group=grp_sl, options=["Pivot", "ATR", "EMA"], tooltip="Pivot: Use swing highs/lows | ATR: Use Average True Range | EMA: Use one of the EMAs")
+
+// Pivot Settings
+pivot_left = input.int(5, "Pivot Left Bars", minval=1, group=grp_sl, tooltip="Used when Stop Loss Method = Pivot")
+pivot_right = input.int(2, "Pivot Right Bars", minval=1, group=grp_sl, tooltip="Used when Stop Loss Method = Pivot")
+
+// ATR Settings
+atr_length = input.int(14, "ATR Length", minval=1, group=grp_sl, tooltip="Used when Stop Loss Method = ATR")
+atr_multiplier = input.float(1.0, "ATR Multiplier", minval=0.1, maxval=10, step=0.1, group=grp_sl, tooltip="Stop distance = ATR × Multiplier")
+
+// EMA Stop Settings
+stop_ema_choice = input.string("EMA2", "Stop Loss EMA", group=grp_sl, options=["EMA1", "EMA2", "EMA3", "EMA4"], tooltip="Used when Stop Loss Method = EMA - which EMA to use as stop level")
+
+// Universal Stop Distance Limits
+min_stop_distance_pct = input.float(0.2, "Min Stop Distance (%)", minval=0.1, maxval=5, step=0.1, group=grp_sl, tooltip="Minimum stop distance as % of entry price. Prevents stops too close to entry.")
+max_stop_distance_pct = input.float(10.0, "Max Stop Distance (%)", minval=1, maxval=50, step=1, group=grp_sl, tooltip="Maximum stop distance as % of entry price. Rejects trades with stops too far away.")
+
+// Risk & Position Settings
+grp_risk = "═══ Risk & Position Management ═══"
+account_size = input.float(100000, "Account Size ($)", minval=100, group=grp_risk)
+leverage = input.float(5.0, "Leverage", minval=1, maxval=100, step=0.5, group=grp_risk)
+
+risk_in_dollars = input.bool(true, "Use Dollar Risk", group=grp_risk, tooltip="If false, uses percentage of account")
+risk_dollars = input.float(1000, "Risk Amount ($)", minval=1, group=grp_risk, tooltip="Target dollar amount to risk per trade")
+risk_pct = input.float(1.0, "Risk Amount (%)", minval=0.1, maxval=10, step=0.1, group=grp_risk, tooltip="Target percentage of account to risk per trade")
+
+max_position_pct = input.float(90, "Max Position Size (%)", minval=10, maxval=100, step=5, group=grp_risk, tooltip="Maximum % of buying power to use per trade. If target risk requires more, position will be capped (and actual risk reduced).")
+
+// Risk Scaling (Compounding)
+grp_scaling = "═══ Risk Scaling & Compounding ═══"
+use_risk_scaling = input.bool(false, "Enable Risk Scaling", group=grp_scaling, tooltip="Scale risk up after wins, reset after loss. Helps compound profits while managing drawdowns.")
+risk_scale_multiplier = input.float(1.5, "Win Multiplier", minval=1.0, maxval=3.0, step=0.1, group=grp_scaling, tooltip="Multiply risk by this after each win (e.g., 1.5 = 50% increase)")
+max_risk_multiplier = input.float(2.5, "Max Risk Multiplier", minval=1.0, maxval=3.0, step=0.1, group=grp_scaling, tooltip="Maximum risk multiplier cap. Default 2.5x (system cuts off at 3x)")
+use_dynamic_equity = input.bool(true, "Use Dynamic Equity", group=grp_scaling, tooltip="Calculate % risk based on current equity instead of fixed account size. Compounds with profits, reduces with losses.")
+
+// Profit Taking Settings
+grp_profit = "═══ Profit Taking ═══"
+profit_mode = input.string("Advanced", "Profit Mode", group=grp_profit, options=["Basic", "Advanced"], tooltip="Basic: 1 TP | Advanced: 3 TPs with moving stops")
+exit_on_ema_cross = input.bool(true, "Exit on EMA Cross", group=grp_profit, tooltip="Close position when EMA1 crosses EMA2 (trend change)")
+
+// Basic Mode Settings
+basic_tp_rr = input.float(3.0, "TP Target (RR)", minval=0.5, step=0.5, group=grp_profit, tooltip="Basic Mode: Single take profit target")
+
+// Advanced Mode Settings
+adv_tp1_rr = input.float(2.0, "TP1 (RR)", minval=0.5, step=0.5, group=grp_profit, tooltip="Advanced: First take profit")
+adv_tp2_rr = input.float(4.0, "TP2 (RR)", minval=0.5, step=0.5, group=grp_profit, tooltip="Advanced: Second take profit")
+adv_tp3_rr = input.float(6.0, "TP3 (RR)", minval=0.5, step=0.5, group=grp_profit, tooltip="Advanced: Final take profit")
+adv_tp1_pct = input.float(50, "TP1 Size (%)", minval=10, maxval=90, step=5, group=grp_profit, tooltip="Advanced: % to close at TP1")
+adv_tp2_pct = input.float(30, "TP2 Size (%)", minval=10, maxval=90, step=5, group=grp_profit, tooltip="Advanced: % to close at TP2")
+adv_tp3_pct = input.float(20, "TP3 Size (%)", minval=10, maxval=90, step=5, group=grp_profit, tooltip="Advanced: % to close at TP3")
+move_to_be_after_tp1 = input.bool(true, "Move to BE after TP1", group=grp_profit, tooltip="Advanced: Move stop to breakeven after TP1 hits")
+
+
+// Strategy Settings
+grp_strategy = "═══ Strategy Settings ═══"
+trade_direction = input.string("Both", "Trade Direction", group=grp_strategy, options=["Long", "Short", "Both"])
+
+// Entry EMA Settings
+entry_ema_choice = input.string("EMA1", "Entry EMA Cross", group=grp_strategy, options=["EMA1", "EMA2", "EMA3", "EMA4"], tooltip="Which EMA to use for entry retest/cross detection")
+cross_detection_method = input.string("Close", "Cross Detection Method", group=grp_strategy, options=["Close", "Wick"], tooltip="Close: Candle must close beyond EMA | Wick: Price can touch EMA with wick but not close beyond")
+
+// Retest Mode Settings
+persistent_retest_mode = input.bool(false, "Persistent Retest Mode", group=grp_strategy, tooltip="When ENABLED: Retest flag stays active until entry or trend change, allowing conditions to improve after retest.\nWhen DISABLED: Retest flag requires ALL conditions met at moment of cross (strict mode).\n\nPersistent mode may increase opportunities but can lead to delayed entries.")
+
+// Higher Timeframe Trend Filters (Directional Bias)
+grp_htf_filters = "═══ HTF Trend Filters (Directional Bias) ═══"
+use_1h_filter = input.bool(false, "Enable 1H 100 MA Filter", group=grp_htf_filters, tooltip="Price > 1H 100 MA = Longs only | Price < 1H 100 MA = Shorts only")
+h1_ma_length = input.int(100, "1H MA Length", minval=1, group=grp_htf_filters)
+
+use_4h_filter = input.bool(false, "Enable 4H 200 EMA Filter", group=grp_htf_filters, tooltip="Price > 4H 200 EMA = Longs only | Price < 4H 200 EMA = Shorts only")
+h4_ema_length = input.int(200, "4H EMA Length", minval=1, group=grp_htf_filters)
+
+show_htf_filters = input.bool(true, "Show HTF Filter Lines", group=grp_htf_filters, tooltip="Display 1H MA and 4H EMA on chart")
+
+// HTF Level Cooldown (Anti-Chop around key levels)
+use_htf_cooldown = input.bool(true, "Enable HTF Level Cooldown", group=grp_htf_filters, tooltip="Avoid trading for specified time after price interacts with HTF levels. Prevents chop around key support/resistance.")
+htf_cooldown_hours = input.float(12, "Cooldown Period (Hours)", minval=1, maxval=48, step=1, group=grp_htf_filters, tooltip="Hours to wait after price touches/crosses HTF level before allowing trades")
+htf_cooldown_interaction = input.string("Touch", "Interaction Type", group=grp_htf_filters, options=["Touch", "Cross"], tooltip="Touch: Any contact with level | Cross: Close beyond level")
+
+// EMA Ordering Filter (relative to HTF filters)
+grp_ema_order = "═══ EMA Ordering Filter ═══"
+use_ema_order_filter = input.bool(false, "Enable EMA Ordering Filter", group=grp_ema_order, tooltip="Require specific number of EMAs to be above/below HTF filter line")
+ema_order_count = input.int(1, "Number of EMAs Required", minval=1, maxval=4, group=grp_ema_order, tooltip="1 = EMA1 only | 2 = EMA1-2 | 3 = EMA1-2-3 | 4 = All EMAs must be above/below HTF filter")
+
+// Additional Filters
+grp_cvd = "═══ CVD Filter (Volume Delta) ═══"
+use_cvd_filter = input.bool(false, "Enable CVD Filter", group=grp_cvd, tooltip="Filter entries based on cumulative volume delta (buying/selling pressure)")
+cvd_length = input.int(20, "CVD Lookback Period", minval=1, group=grp_cvd, tooltip="Number of bars to analyze CVD trend")
+cvd_require_positive_long = input.bool(true, "Longs: Require Positive CVD", group=grp_cvd, tooltip="CVD must be > 0 for long entries")
+cvd_require_rising_long = input.bool(true, "Longs: Require Rising CVD", group=grp_cvd, tooltip="CVD must be higher than N bars ago")
+cvd_require_negative_short = input.bool(true, "Shorts: Require Negative CVD", group=grp_cvd, tooltip="CVD must be < 0 for short entries")
+cvd_require_falling_short = input.bool(true, "Shorts: Require Falling CVD", group=grp_cvd, tooltip="CVD must be lower than N bars ago")
+
+grp_rsi = "═══ RSI Filter (Momentum) ═══"
+use_rsi_filter = input.bool(false, "Enable RSI Filter", group=grp_rsi, tooltip="Filter entries based on RSI levels")
+rsi_length = input.int(14, "RSI Length", minval=1, group=grp_rsi)
+rsi_long_min = input.float(40, "Longs: Min RSI", minval=0, maxval=100, group=grp_rsi, tooltip="Long entries require RSI above this level")
+rsi_long_max = input.float(70, "Longs: Max RSI", minval=0, maxval=100, group=grp_rsi, tooltip="Long entries require RSI below this level (avoid overbought)")
+rsi_short_min = input.float(30, "Shorts: Min RSI", minval=0, maxval=100, group=grp_rsi, tooltip="Short entries require RSI above this level (avoid oversold)")
+rsi_short_max = input.float(60, "Shorts: Max RSI", minval=0, maxval=100, group=grp_rsi, tooltip="Short entries require RSI below this level")
+
+grp_macd = "═══ MACD Filter (Trend Momentum) ═══"
+use_macd_filter = input.bool(false, "Enable MACD Filter", group=grp_macd, tooltip="Filter entries based on MACD crossover and position")
+macd_fast = input.int(12, "MACD Fast Length", minval=1, group=grp_macd)
+macd_slow = input.int(26, "MACD Slow Length", minval=1, group=grp_macd)
+macd_signal = input.int(9, "MACD Signal Length", minval=1, group=grp_macd)
+macd_require_above_signal_long = input.bool(true, "Longs: MACD > Signal", group=grp_macd, tooltip="Require MACD line above signal line for longs")
+macd_require_above_zero_long = input.bool(false, "Longs: MACD > Zero", group=grp_macd, tooltip="Require MACD histogram above zero line for longs")
+macd_require_below_signal_short = input.bool(true, "Shorts: MACD < Signal", group=grp_macd, tooltip="Require MACD line below signal line for shorts")
+macd_require_below_zero_short = input.bool(false, "Shorts: MACD < Zero", group=grp_macd, tooltip="Require MACD histogram below zero line for shorts")
+
+grp_trend_time = "═══ Trend Duration Filter (Anti-Chop) ═══"
+use_trend_time_filter = input.bool(false, "Enable Trend Duration Filter", group=grp_trend_time, tooltip="Require trend to be established for minimum time before taking trades. Prevents entries during choppy/whipsaw conditions.")
+trend_time_method = input.string("Hours", "Duration Method", group=grp_trend_time, options=["Hours", "Bars"], tooltip="Hours: Specify minimum hours in trend | Bars: Specify minimum bars in trend")
+trend_min_hours = input.float(12, "Minimum Trend Hours", minval=0.5, maxval=72, step=0.5, group=grp_trend_time, tooltip="Used when Duration Method = Hours. Minimum hours EMAs must be aligned.")
+trend_min_bars = input.int(50, "Minimum Trend Bars", minval=5, maxval=500, group=grp_trend_time, tooltip="Used when Duration Method = Bars. Minimum bars EMAs must be aligned.")
+trend_check_ema_separation = input.bool(true, "Require Increasing Separation", group=grp_trend_time, tooltip="During trend duration, EMAs must be separating (not converging). Filters out exhausted trends.")
+
+grp_post_trade = "═══ Post-Trade Cooldown (Anti-Revenge Trading) ═══"
+use_post_trade_cooldown = input.bool(false, "Enable Post-Trade Cooldown", group=grp_post_trade, tooltip="Pause trading for specified time after closing any position (TP, SL, or EMA cross). Prevents revenge trading and lets market settle.")
+post_trade_method = input.string("Hours", "Cooldown Method", group=grp_post_trade, options=["Hours", "Bars"], tooltip="Hours: Wait X hours after exit | Bars: Wait X bars after exit")
+post_trade_hours = input.float(2, "Cooldown Hours", minval=0.1, maxval=24, step=0.1, group=grp_post_trade, tooltip="Hours to wait after closing position before allowing new entries")
+post_trade_bars = input.int(10, "Cooldown Bars", minval=1, maxval=200, group=grp_post_trade, tooltip="Bars to wait after closing position before allowing new entries")
+
+grp_orderflow = "═══ Orderflow Filter (Directional Pressure) ═══"
+use_orderflow_filter = input.bool(false, "Enable Orderflow Filter", group=grp_orderflow, tooltip="Multi-timeframe orderflow analysis for trend confirmation")
+of_timeframe = input.string("15", "Orderflow Timeframe", group=grp_orderflow, options=["5", "15", "30", "60", "240"], tooltip="Higher timeframe for orderflow analysis")
+of_lookback = int(input.int(10, "Orderflow Lookback Bars", minval=3, maxval=50, group=grp_orderflow, tooltip="Number of HTF bars to analyze"))
+of_bullish_threshold = input.float(60, "Bullish Threshold (%)", minval=50, maxval=100, group=grp_orderflow, tooltip="% of HTF bars that must be bullish for long entries")
+of_bearish_threshold = input.float(60, "Bearish Threshold (%)", minval=50, maxval=100, group=grp_orderflow, tooltip="% of HTF bars that must be bearish for short entries")
+of_require_volume_trend = input.bool(true, "Require Increasing Volume", group=grp_orderflow, tooltip="Volume trend must support price direction")
+of_require_strong_bars = input.bool(true, "Require Strong Bars", group=grp_orderflow, tooltip="Recent bars must show conviction (close near high/low)")
+
+grp_volatility = "═══ Volatility Filter (Trend Quality) ═══"
+use_volatility_filter = input.bool(false, "Enable Volatility Filter", group=grp_volatility, tooltip="Multi-timeframe volatility regime filter for optimal trend conditions")
+vol_timeframe = input.string("60", "Volatility Timeframe", group=grp_volatility, options=["15", "30", "60", "240", "D"], tooltip="Higher timeframe for volatility analysis")
+vol_atr_length = input.int(14, "ATR Length", minval=5, maxval=50, group=grp_volatility)
+vol_regime_lookback = input.int(100, "Regime Lookback", minval=20, maxval=500, group=grp_volatility, tooltip="Bars to determine normal volatility range")
+vol_min_percentile = input.float(30, "Min Volatility Percentile", minval=0, maxval=100, group=grp_volatility, tooltip="Reject entries when volatility is below this percentile (too quiet)")
+vol_max_percentile = input.float(80, "Max Volatility Percentile", minval=0, maxval=100, group=grp_volatility, tooltip="Reject entries when volatility is above this percentile (too choppy)")
+vol_require_expansion = input.bool(true, "Require Volatility Expansion", group=grp_volatility, tooltip="ATR must be rising (trending moves expand volatility)")
+vol_expansion_lookback = input.int(5, "Expansion Lookback", minval=3, maxval=20, group=grp_volatility, tooltip="Bars to compare for volatility expansion")
+
+// Fee Settings
+grp_fees = "═══ Fee Settings ═══"
+fee_platform = input.string("Breakout", "Fee Platform", group=grp_fees, options=["Breakout", "Edgex", "Blofin", "Bybit", "HyperLiquid", "Custom"], tooltip="NOTE: Fees are set to 0% for clean R multiples. Real trading will incur these fees on top of displayed results.")
+entry_type = input.string("Market", "Entry Type", group=grp_fees, options=["Limit", "Market"])
+custom_maker = input.float(0.02, "Custom Maker Fee (%)", minval=0, step=0.01, group=grp_fees)
+custom_taker = input.float(0.05, "Custom Taker Fee (%)", minval=0, step=0.01, group=grp_fees)
+
+// Visual Settings
+grp_visual = "═══ Visual Settings ═══"
+show_emas = input.bool(true, "Show All EMAs", group=grp_visual)
+show_ema_fill = input.bool(true, "Show EMA Fill (1-4)", group=grp_visual, tooltip="Fill between EMA1 and EMA4 based on alignment")
+show_ltf_fill = input.bool(false, "Show LTF Fill (1-2)", group=grp_visual, tooltip="Fill between EMA1 and EMA2")
+show_htf_fill = input.bool(false, "Show HTF Fill (3-4)", group=grp_visual, tooltip="Fill between EMA3 and EMA4")
+show_pivots = input.bool(true, "Show Stop Levels", group=grp_visual)
+show_atr_bands = input.bool(true, "Show ATR Bands", group=grp_visual, tooltip="Show ATR-based stop levels (when ATR method selected)")
+show_info_panel = input.bool(true, "Show Info Panel", group=grp_visual)
+show_position_labels = input.bool(true, "Show Position Labels", group=grp_visual)
+show_trade_boxes = input.bool(true, "Show Trade Boxes", group=grp_visual, tooltip="Draw boxes for each executed trade")
+max_boxes_to_show = input.int(10, "Max Historical Boxes", minval=1, maxval=100, group=grp_visual, tooltip="Number of recent trade boxes to display")
+show_performance_stats = input.bool(true, "Show Performance Stats Panel", group=grp_visual, tooltip="Show detailed period performance")
+show_debug_labels = input.bool(false, "Show Debug Labels", group=grp_visual, tooltip="Show detailed entry rejection reasons")
+show_indicators_panel = input.bool(false, "Show Indicators Panel", group=grp_visual, tooltip="Show CVD, RSI, MACD values in separate panel")
+
+// ========================================
+// FEE CALCULATIONS (For Reference Only)
+// ========================================
+// NOTE: Strategy commission is set to 0% for clean R multiples
+// These calculations are kept for future fee tracking features
+
+var float maker_fee = 0.0
+var float taker_fee = 0.0
+
+if fee_platform == "Breakout"
+    maker_fee := 0.035
+    taker_fee := 0.035
+else if fee_platform == "Edgex"
+    maker_fee := 0.015
+    taker_fee := 0.038
+else if fee_platform == "Blofin"
+    maker_fee := 0.0200
+    taker_fee := 0.0600
+else if fee_platform == "Bybit"
+    maker_fee := 0.0200
+    taker_fee := 0.0550
+else if fee_platform == "HyperLiquid"
+    maker_fee := 0.0150
+    taker_fee := 0.0450
+else if fee_platform == "Custom"
+    maker_fee := custom_maker
+    taker_fee := custom_taker
+
+entry_fee_rate = entry_type == "Limit" ? maker_fee/100 : taker_fee/100
+exit_fee_rate = taker_fee/100
+total_fee_rate = entry_fee_rate + exit_fee_rate
+
+// ========================================
+// SIGNAL TRACKING (INDICATOR MODE)
+// ========================================
+
+// Signal Statistics Tracking
+var int total_long_signals = 0
+var int total_short_signals = 0
+var float current_simulated_equity = 0.0
+var bool simulated_long_position = false
+var bool simulated_short_position = false
+var float simulated_entry_price = na
+var float simulated_stop_price = na
+var float simulated_position_size = 0.0
+
+// Signal-based tracking for indicator mode
+var int consecutive_long_signals = 0
+var int consecutive_short_signals = 0
+var int max_consecutive_longs = 0
+var int max_consecutive_shorts = 0
+
+// ========================================
+// INITIALIZATION
+// ========================================
+
+// Initialize simulated equity to account size on first bar
+if na(current_simulated_equity)
+    current_simulated_equity := account_size
+
+// ========================================
+// EMA CALCULATIONS
+// ========================================
+
+// Calculate all 4 EMAs
+ema1 = ta.ema(close, ema1_length)  // LTF Fast (e.g., 50)
+ema2 = ta.ema(close, ema2_length)  // LTF Slow (e.g., 200)
+ema3 = ta.ema(close, ema3_length)  // HTF Fast (e.g., 250)
+ema4 = ta.ema(close, ema4_length)  // HTF Slow (e.g., 1000)
+
+// Calculate ATR for stop loss (if ATR method selected)
+atr_value = ta.atr(atr_length)
+
+// ========================================
+// ADDITIONAL INDICATOR CALCULATIONS
+// ========================================
+
+// CVD (Cumulative Volume Delta) Calculation
+// Approximates buying vs selling pressure using volume and price movement
+var float cvd = 0.0
+volume_delta = close > close[1] ? volume : close < close[1] ? -volume : 0
+cvd := cvd + volume_delta
+
+// Check CVD conditions
+cvd_positive = cvd > 0
+cvd_negative = cvd < 0
+cvd_rising = cvd > cvd[cvd_length]
+cvd_falling = cvd < cvd[cvd_length]
+
+// RSI Calculation
+rsi_value = ta.rsi(close, rsi_length)
+
+// Check RSI conditions
+rsi_long_ok = rsi_value >= rsi_long_min and rsi_value <= rsi_long_max
+rsi_short_ok = rsi_value >= rsi_short_min and rsi_value <= rsi_short_max
+
+// MACD Calculation
+[macd_line, signal_line, macd_hist] = ta.macd(close, macd_fast, macd_slow, macd_signal)
+
+// Check MACD conditions
+macd_above_signal = macd_line > signal_line
+macd_below_signal = macd_line < signal_line
+macd_above_zero = macd_hist > 0
+macd_below_zero = macd_hist < 0
+
+// Build combined MACD filter conditions
+macd_long_ok = true
+macd_short_ok = true
+
+if macd_require_above_signal_long
+    macd_long_ok := macd_long_ok and macd_above_signal
+if macd_require_above_zero_long
+    macd_long_ok := macd_long_ok and macd_above_zero
+
+if macd_require_below_signal_short
+    macd_short_ok := macd_short_ok and macd_below_signal
+if macd_require_below_zero_short
+    macd_short_ok := macd_short_ok and macd_below_zero
+
+// Build combined CVD filter conditions
+cvd_long_ok = true
+cvd_short_ok = true
+
+if cvd_require_positive_long
+    cvd_long_ok := cvd_long_ok and cvd_positive
+if cvd_require_rising_long
+    cvd_long_ok := cvd_long_ok and cvd_rising
+
+if cvd_require_negative_short
+    cvd_short_ok := cvd_short_ok and cvd_negative
+if cvd_require_falling_short
+    cvd_short_ok := cvd_short_ok and cvd_falling
+
+// ========================================
+// ORDERFLOW FILTER (Multi-Timeframe)
+// ========================================
+
+// Get HTF data for orderflow analysis (current bar and series history)
+[of_htf_open, of_htf_close, of_htf_high, of_htf_low, of_htf_volume] = request.security(syminfo.tickerid, of_timeframe, [open, close, high, low, volume], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+// Analyze recent HTF bars for directional pressure
+// Since we can't use loop variables in request.security(), we analyze bars from series history
+of_bullish_count = 0
+of_bearish_count = 0
+of_volume_sum = 0.0
+
+// Count bullish/bearish bars in lookback period using direct series access
+for i = 0 to of_lookback - 1
+    // Access HTF data from series history (no request.security calls here)
+    bar_is_bullish = of_htf_close[i] > of_htf_open[i]
+    bar_is_bearish = of_htf_close[i] < of_htf_open[i]
+    
+    if bar_is_bullish
+        of_bullish_count := of_bullish_count + 1
+    else if bar_is_bearish
+        of_bearish_count := of_bearish_count + 1
+    
+    of_volume_sum := of_volume_sum + of_htf_volume[i]
+
+of_recent_volume_ma = of_volume_sum / of_lookback
+
+// Calculate directional pressure percentage
+of_total_directional = of_bullish_count + of_bearish_count
+of_bullish_pct = of_total_directional > 0 ? (of_bullish_count / of_total_directional * 100) : 50
+of_bearish_pct = of_total_directional > 0 ? (of_bearish_count / of_total_directional * 100) : 50
+
+// Check if recent bars are "strong" (close near extremes)
+of_bar_range = of_htf_high - of_htf_low
+of_close_position = of_bar_range > 0 ? (of_htf_close - of_htf_low) / of_bar_range : 0.5
+of_strong_bullish = of_close_position > 0.7  // Close in top 30% of range
+of_strong_bearish = of_close_position < 0.3  // Close in bottom 30% of range
+
+// Volume trend check (current vs average)
+of_volume_increasing = of_htf_volume > of_recent_volume_ma * 0.9  // Allow 10% below MA
+
+// Build orderflow conditions
+of_bullish_pressure = of_bullish_pct >= of_bullish_threshold
+of_bearish_pressure = of_bearish_pct >= of_bearish_threshold
+
+of_long_ok = of_bullish_pressure
+of_short_ok = of_bearish_pressure
+
+if of_require_strong_bars
+    of_long_ok := of_long_ok and of_strong_bullish
+    of_short_ok := of_short_ok and of_strong_bearish
+
+if of_require_volume_trend
+    of_long_ok := of_long_ok and of_volume_increasing
+    of_short_ok := of_short_ok and of_volume_increasing
+
+// ========================================
+// VOLATILITY FILTER (Multi-Timeframe)
+// ========================================
+
+// Get HTF ATR for volatility analysis
+vol_htf_atr = request.security(syminfo.tickerid, vol_timeframe, ta.atr(vol_atr_length), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+// Calculate volatility percentile rank over lookback period
+var array<float> vol_history = array.new<float>(0)
+
+// Build volatility history array
+if barstate.isconfirmed
+    array.push(vol_history, vol_htf_atr)
+    if array.size(vol_history) > vol_regime_lookback
+        array.shift(vol_history)
+
+// Calculate percentile rank of current volatility
+vol_current_rank = 50.0  // Default to middle
+
+if array.size(vol_history) >= 20  // Need minimum data
+    vol_sorted = array.copy(vol_history)
+    array.sort(vol_sorted, order.ascending)
+    
+    // Find where current ATR ranks
+    vol_below_count = 0
+    for i = 0 to array.size(vol_sorted) - 1
+        if array.get(vol_sorted, i) < vol_htf_atr
+            vol_below_count += 1
+    
+    vol_current_rank := (vol_below_count / array.size(vol_sorted)) * 100
+
+// Check if volatility is expanding (ATR rising)
+vol_atr_previous = request.security(syminfo.tickerid, vol_timeframe, ta.atr(vol_atr_length)[vol_expansion_lookback], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+vol_is_expanding = vol_htf_atr > vol_atr_previous
+
+// Build volatility conditions
+vol_in_range = vol_current_rank >= vol_min_percentile and vol_current_rank <= vol_max_percentile
+
+vol_ok = vol_in_range
+
+if vol_require_expansion
+    vol_ok := vol_ok and vol_is_expanding
+
+// ========================================
+// HIGHER TIMEFRAME TREND FILTERS (Directional Bias)
+// ========================================
+
+// 1 Hour 100 MA
+h1_ma = request.security(syminfo.tickerid, "60", ta.sma(close, h1_ma_length), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+// 4 Hour 200 EMA
+h4_ema = request.security(syminfo.tickerid, "240", ta.ema(close, h4_ema_length), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+// ========================================
+// HTF LEVEL COOLDOWN TRACKING
+// ========================================
+
+// Track when price last interacted with HTF levels
+var int last_h1_interaction_bar = -99999  // Initialize to very old bar
+var int last_h4_interaction_bar = -99999
+
+// Detect interaction with 1H 100 MA
+h1_interaction = false
+if use_1h_filter
+    if htf_cooldown_interaction == "Touch"
+        // Touch: High/low touches or crosses the MA
+        h1_interaction := (low <= h1_ma and high >= h1_ma)
+    else  // "Cross"
+        // Cross: Close crosses above or below the MA
+        h1_interaction := ta.cross(close, h1_ma)
+    
+    if h1_interaction
+        last_h1_interaction_bar := bar_index
+
+// Detect interaction with 4H 200 EMA
+h4_interaction = false
+if use_4h_filter
+    if htf_cooldown_interaction == "Touch"
+        // Touch: High/low touches or crosses the EMA
+        h4_interaction := (low <= h4_ema and high >= h4_ema)
+    else  // "Cross"
+        // Cross: Close crosses above or below the EMA
+        h4_interaction := ta.cross(close, h4_ema)
+    
+    if h4_interaction
+        last_h4_interaction_bar := bar_index
+
+// Calculate bars elapsed since last interaction
+bars_since_h1_interaction = bar_index - last_h1_interaction_bar
+bars_since_h4_interaction = bar_index - last_h4_interaction_bar
+
+// Convert cooldown hours to bars
+bars_per_hour_htf = timeframe.in_seconds() / 3600  // Bars per hour based on chart timeframe
+htf_cooldown_bars = int(htf_cooldown_hours / bars_per_hour_htf)
+
+// Check if cooldown period has passed
+h1_cooldown_ok = bars_since_h1_interaction >= htf_cooldown_bars
+h4_cooldown_ok = bars_since_h4_interaction >= htf_cooldown_bars
+
+// Build combined cooldown condition
+htf_cooldown_ok = true
+if use_htf_cooldown
+    if use_1h_filter
+        htf_cooldown_ok := htf_cooldown_ok and h1_cooldown_ok
+    if use_4h_filter
+        htf_cooldown_ok := htf_cooldown_ok and h4_cooldown_ok
+
+// Directional bias based on price position relative to HTF levels
+// BULLISH BIAS: Price above the HTF level(s)
+// BEARISH BIAS: Price below the HTF level(s)
+
+bool h1_bullish_bias = close > h1_ma
+bool h1_bearish_bias = close < h1_ma
+bool h4_bullish_bias = close > h4_ema
+bool h4_bearish_bias = close < h4_ema
+
+// Apply filters based on what's enabled
+// If both enabled: Require price > 1H 100 MA > 4H 200 EMA for bullish (cascading alignment)
+bool htf_filter_long = true
+bool htf_filter_short = true
+
+if use_1h_filter and use_4h_filter
+    // Both enabled: Require cascading alignment (1H must also be above 4H)
+    htf_filter_long := h1_bullish_bias and h4_bullish_bias and (h1_ma > h4_ema)
+    htf_filter_short := h1_bearish_bias and h4_bearish_bias and (h1_ma < h4_ema)
+else if use_1h_filter
+    // Only 1H enabled
+    htf_filter_long := h1_bullish_bias
+    htf_filter_short := h1_bearish_bias
+else if use_4h_filter
+    // Only 4H enabled
+    htf_filter_long := h4_bullish_bias
+    htf_filter_short := h4_bearish_bias
+
+// EMA Ordering Filter (relative to HTF filters)
+// Requires enabled EMAs to be positioned above/below the HTF filter line
+bool ema_order_filter_long = true
+bool ema_order_filter_short = true
+
+if use_ema_order_filter and (use_1h_filter or use_4h_filter)
+    // Determine which HTF filter line to use (prioritize 1H if both enabled)
+    float htf_reference = use_1h_filter ? h1_ma : h4_ema
+    
+    // Build filter check based on enabled EMAs only
+    // Count how many enabled EMAs we need to check based on ema_order_count
+    int enabled_count = 0
+    if use_ema1
+        enabled_count := enabled_count + 1
+    if use_ema2
+        enabled_count := enabled_count + 1
+    if use_ema3
+        enabled_count := enabled_count + 1
+    if use_ema4
+        enabled_count := enabled_count + 1
+    
+    // Determine how many EMAs to check (minimum of requested count and enabled count)
+    int check_count = math.min(ema_order_count, enabled_count)
+    
+    // Check EMAs based on which ones are enabled (in order)
+    ema_order_filter_long := true
+    ema_order_filter_short := true
+    
+    int checked = 0
+    
+    // Check EMA1 if enabled and within count
+    if use_ema1 and checked < check_count
+        ema_order_filter_long := ema_order_filter_long and ema1 > htf_reference
+        ema_order_filter_short := ema_order_filter_short and ema1 < htf_reference
+        checked := checked + 1
+    
+    // Check EMA2 if enabled and within count
+    if use_ema2 and checked < check_count
+        ema_order_filter_long := ema_order_filter_long and ema2 > htf_reference
+        ema_order_filter_short := ema_order_filter_short and ema2 < htf_reference
+        if use_ema1  // Also check ordering if previous EMA enabled
+            ema_order_filter_long := ema_order_filter_long and ema1 > ema2
+            ema_order_filter_short := ema_order_filter_short and ema1 < ema2
+        checked := checked + 1
+    
+    // Check EMA3 if enabled and within count
+    if use_ema3 and checked < check_count
+        ema_order_filter_long := ema_order_filter_long and ema3 > htf_reference
+        ema_order_filter_short := ema_order_filter_short and ema3 < htf_reference
+        if use_ema2  // Check ordering with immediate previous enabled EMA
+            ema_order_filter_long := ema_order_filter_long and ema2 > ema3
+            ema_order_filter_short := ema_order_filter_short and ema2 < ema3
+        else if use_ema1  // If EMA2 disabled, check with EMA1
+            ema_order_filter_long := ema_order_filter_long and ema1 > ema3
+            ema_order_filter_short := ema_order_filter_short and ema1 < ema3
+        checked := checked + 1
+    
+    // Check EMA4 if enabled and within count
+    if use_ema4 and checked < check_count
+        ema_order_filter_long := ema_order_filter_long and ema4 > htf_reference
+        ema_order_filter_short := ema_order_filter_short and ema4 < htf_reference
+        if use_ema3  // Check ordering with immediate previous enabled EMA
+            ema_order_filter_long := ema_order_filter_long and ema3 > ema4
+            ema_order_filter_short := ema_order_filter_short and ema3 < ema4
+        else if use_ema2  // If EMA3 disabled, check with EMA2
+            ema_order_filter_long := ema_order_filter_long and ema2 > ema4
+            ema_order_filter_short := ema_order_filter_short and ema2 < ema4
+        else if use_ema1  // If EMA2 and EMA3 disabled, check with EMA1
+            ema_order_filter_long := ema_order_filter_long and ema1 > ema4
+            ema_order_filter_short := ema_order_filter_short and ema1 < ema4
+        checked := checked + 1
+
+// ========================================
+// EMA ALIGNMENT CHECKS (Respecting enabled EMAs)
+// ========================================
+
+// Build dynamic alignment checks based on which EMAs are enabled
+// Bullish: Enabled EMAs must be in descending order (faster > slower)
+// Bearish: Enabled EMAs must be in ascending order (faster < slower)
+
+// Helper function to check if EMA is enabled
+is_ema_enabled(ema_num) =>
+    if ema_num == 1
+        use_ema1
+    else if ema_num == 2
+        use_ema2
+    else if ema_num == 3
+        use_ema3
+    else if ema_num == 4
+        use_ema4
+    else
+        false
+
+// Build alignment check dynamically based on enabled EMAs
+bool bullish_alignment = true
+bool bearish_alignment = true
+
+// Check alignment between consecutive enabled EMAs
+if use_ema1 and use_ema2
+    bullish_alignment := bullish_alignment and ema1 > ema2
+    bearish_alignment := bearish_alignment and ema1 < ema2
+
+if use_ema2 and use_ema3
+    bullish_alignment := bullish_alignment and ema2 > ema3
+    bearish_alignment := bearish_alignment and ema2 < ema3
+
+if use_ema3 and use_ema4
+    bullish_alignment := bullish_alignment and ema3 > ema4
+    bearish_alignment := bearish_alignment and ema3 < ema4
+
+// Also check non-consecutive pairs if intermediate EMA is disabled
+if use_ema1 and use_ema3 and not use_ema2
+    bullish_alignment := bullish_alignment and ema1 > ema3
+    bearish_alignment := bearish_alignment and ema1 < ema3
+
+if use_ema1 and use_ema4 and not use_ema2 and not use_ema3
+    bullish_alignment := bullish_alignment and ema1 > ema4
+    bearish_alignment := bearish_alignment and ema1 < ema4
+
+if use_ema2 and use_ema4 and not use_ema3
+    bullish_alignment := bullish_alignment and ema2 > ema4
+    bearish_alignment := bearish_alignment and ema2 < ema4
+
+// Helper function to get EMA value by name
+get_ema_value(ema_name) =>
+    if ema_name == "EMA1"
+        ema1
+    else if ema_name == "EMA2"
+        ema2
+    else if ema_name == "EMA3"
+        ema3
+    else if ema_name == "EMA4"
+        ema4
+    else
+        ema1
+
+// Helper function to check if EMA pair is enabled
+is_ema_pair_enabled(ema_name_1, ema_name_2) =>
+    enabled_1 = ema_name_1 == "EMA1" ? use_ema1 : ema_name_1 == "EMA2" ? use_ema2 : ema_name_1 == "EMA3" ? use_ema3 : ema_name_1 == "EMA4" ? use_ema4 : false
+    enabled_2 = ema_name_2 == "EMA1" ? use_ema1 : ema_name_2 == "EMA2" ? use_ema2 : ema_name_2 == "EMA3" ? use_ema3 : ema_name_2 == "EMA4" ? use_ema4 : false
+    enabled_1 and enabled_2
+
+// Check EMA spacing to ensure strong trend (only if both EMAs in pair are enabled)
+spacing_1_from_value = get_ema_value(spacing_check_1_from)
+spacing_1_to_value = get_ema_value(spacing_check_1_to)
+spacing_1_pct = math.abs((spacing_1_from_value - spacing_1_to_value) / spacing_1_to_value * 100)
+spacing_1_pair_enabled = is_ema_pair_enabled(spacing_check_1_from, spacing_check_1_to)
+good_spacing_1 = spacing_1_pair_enabled ? spacing_1_pct >= min_spacing_1 : true  // Pass if pair disabled
+
+spacing_2_from_value = get_ema_value(spacing_check_2_from)
+spacing_2_to_value = get_ema_value(spacing_check_2_to)
+spacing_2_pct = math.abs((spacing_2_from_value - spacing_2_to_value) / spacing_2_to_value * 100)
+spacing_2_pair_enabled = is_ema_pair_enabled(spacing_check_2_from, spacing_check_2_to)
+good_spacing_2 = spacing_2_pair_enabled ? spacing_2_pct >= min_spacing_2 : true  // Pass if pair disabled
+
+good_ema_spacing = good_spacing_1 and good_spacing_2
+
+// Overall trend confirmation (respecting enabled EMAs)
+// Build minimum requirements based on what's enabled
+bool basic_bullish = true
+bool basic_bearish = true
+
+if use_ema1 and use_ema2
+    basic_bullish := basic_bullish and ema1 > ema2
+    basic_bearish := basic_bearish and ema1 < ema2
+
+if use_ema2 and use_ema3
+    basic_bullish := basic_bullish and ema2 > ema3
+    basic_bearish := basic_bearish and ema2 < ema3
+else if use_ema1 and use_ema3 and not use_ema2  // If EMA2 disabled, check EMA1 vs EMA3
+    basic_bullish := basic_bullish and ema1 > ema3
+    basic_bearish := basic_bearish and ema1 < ema3
+
+bullish_trend = require_all_emas_aligned ? (bullish_alignment and good_ema_spacing) : basic_bullish
+bearish_trend = require_all_emas_aligned ? (bearish_alignment and good_ema_spacing) : basic_bearish
+
+// ========================================
+// TREND DURATION FILTER (Anti-Chop)
+// ========================================
+
+// Track how long the current trend has been active (consecutive bars with EMA alignment)
+// NOTE: Trend duration uses EMA1-2-3 only (not EMA4) for faster qualification
+var int bullish_trend_bars = 0
+var int bearish_trend_bars = 0
+
+// Build alignment check for EMA1-2-3 only (for trend duration)
+bool bullish_alignment_123 = true
+bool bearish_alignment_123 = true
+
+// Check alignment between EMA1-2-3 (exclude EMA4 from trend duration check)
+if use_ema1 and use_ema2
+    bullish_alignment_123 := bullish_alignment_123 and ema1 > ema2
+    bearish_alignment_123 := bearish_alignment_123 and ema1 < ema2
+
+if use_ema2 and use_ema3
+    bullish_alignment_123 := bullish_alignment_123 and ema2 > ema3
+    bearish_alignment_123 := bearish_alignment_123 and ema2 < ema3
+
+// Also check non-consecutive pairs if intermediate EMA is disabled
+if use_ema1 and use_ema3 and not use_ema2
+    bullish_alignment_123 := bullish_alignment_123 and ema1 > ema3
+    bearish_alignment_123 := bearish_alignment_123 and ema1 < ema3
+
+// Update trend duration counters based on EMA1-2-3 alignment
+if bullish_alignment_123
+    bullish_trend_bars := bullish_trend_bars + 1
+    bearish_trend_bars := 0
+else if bearish_alignment_123
+    bearish_trend_bars := bearish_trend_bars + 1
+    bullish_trend_bars := 0
+else
+    // No clear alignment - reset both
+    bullish_trend_bars := 0
+    bearish_trend_bars := 0
+
+// Convert hours to bars based on chart timeframe
+get_bars_per_hour() =>
+    timeframe_minutes = timeframe.in_seconds() / 60
+    bars_per_hour = 60 / timeframe_minutes
+    bars_per_hour
+
+// Calculate minimum bars required based on method
+trend_min_bars_required = 0
+if trend_time_method == "Hours"
+    bars_per_hour = get_bars_per_hour()
+    trend_min_bars_required := int(trend_min_hours * bars_per_hour)
+else
+    trend_min_bars_required := trend_min_bars
+
+// Check if EMAs are separating (not converging) over the trend period
+// This filters out exhausted trends that are about to reverse
+// Uses EMA1-2-3 spacing (not EMA4) to match trend duration tracking
+trend_emas_separating_long = true
+trend_emas_separating_short = true
+
+if trend_check_ema_separation and use_ema1 and use_ema2
+    // Check if EMA1-EMA2 spacing is increasing (expanding) vs N bars ago
+    check_bars_back = math.min(10, bullish_trend_bars)  // Look back 10 bars or less
+    if check_bars_back > 0
+        current_spacing = math.abs(ema1 - ema2)
+        past_spacing = math.abs(ema1[check_bars_back] - ema2[check_bars_back])
+        trend_emas_separating_long := current_spacing >= past_spacing * 0.95  // Allow 5% tolerance
+        trend_emas_separating_short := current_spacing >= past_spacing * 0.95
+
+// Build trend duration conditions
+trend_time_long_ok = bullish_trend_bars >= trend_min_bars_required
+trend_time_short_ok = bearish_trend_bars >= trend_min_bars_required
+
+if trend_check_ema_separation
+    trend_time_long_ok := trend_time_long_ok and trend_emas_separating_long
+    trend_time_short_ok := trend_time_short_ok and trend_emas_separating_short
+
+// ========================================
+// POST-TRADE COOLDOWN (Anti-Revenge Trading)
+// ========================================
+
+// Track when the last trade closed
+var int last_trade_close_bar = -99999  // Bar index when last trade closed
+
+// Detect simulated trade closes and update cooldown tracking
+// This will be set in the simulated position monitoring section when trades close
+
+// Calculate bars elapsed since last trade close
+int bars_since_trade_close = bar_index - last_trade_close_bar
+
+// Convert cooldown to bars based on method
+int post_trade_cooldown_bars = 0
+if post_trade_method == "Hours"
+    bars_per_hour_pt = get_bars_per_hour()
+    post_trade_cooldown_bars := int(post_trade_hours * bars_per_hour_pt)
+else
+    post_trade_cooldown_bars := post_trade_bars
+
+// Check if cooldown period has passed
+bool post_trade_cooldown_ok = bars_since_trade_close >= post_trade_cooldown_bars
+
+// ========================================
+// PIVOT CALCULATIONS
+// ========================================
+
+pivot_high = ta.pivothigh(high, pivot_left, pivot_right)
+pivot_low = ta.pivotlow(low, pivot_left, pivot_right)
+
+var float last_pivot_high = na
+var float last_pivot_low = na
+
+if not na(pivot_high)
+    last_pivot_high := pivot_high
+if not na(pivot_low)
+    last_pivot_low := pivot_low
+
+// ========================================
+// RETEST DETECTION (Two-Step Process with State Tracking)
+// ========================================
+
+// Determine which EMA to use for retest detection based on user selection
+float retest_ema = na
+if entry_ema_choice == "EMA1" and use_ema1
+    retest_ema := ema1
+else if entry_ema_choice == "EMA2" and use_ema2
+    retest_ema := ema2
+else if entry_ema_choice == "EMA3" and use_ema3
+    retest_ema := ema3
+else if entry_ema_choice == "EMA4" and use_ema4
+    retest_ema := ema4
+else
+    // Fallback: Use first enabled EMA if selected EMA is disabled
+    if use_ema1
+        retest_ema := ema1
+    else if use_ema2
+        retest_ema := ema2
+    else if use_ema3
+        retest_ema := ema3
+    else if use_ema4
+        retest_ema := ema4
+
+// For LONGS in uptrend: 
+//   Step 1: Price goes BELOW retest EMA (retest from above)
+//   Step 2: Price goes back ABOVE retest EMA (entry trigger)
+//
+// For SHORTS in downtrend:
+//   Step 1: Price goes ABOVE retest EMA (retest from below)  
+//   Step 2: Price goes back BELOW retest EMA (entry trigger)
+
+var bool price_below_retest_ema = false   // Track if price is currently below retest EMA
+var bool price_above_retest_ema = false   // Track if price is currently above retest EMA
+var bool had_long_retest = false          // Price dipped below then back above - ready for long
+var bool had_short_retest = false         // Price rose above then back below - ready for short
+
+// Only do retest detection if we have at least one EMA enabled
+if not na(retest_ema)
+    // Update price position relative to retest EMA based on detection method
+    bool currently_below = false
+    bool currently_above = false
+    
+    if cross_detection_method == "Close"
+        // Close-based: Candle must close beyond EMA
+        currently_below := close < retest_ema
+        currently_above := close > retest_ema
+    else  // "Wick"
+        // Wick-based: For longs, we're "below" if low touched but didn't close below
+        // For shorts, we're "above" if high touched but didn't close above
+        // This allows entries when price wicks to EMA but doesn't close beyond it
+        currently_below := low < retest_ema and close >= retest_ema  // Wicked down but closed above
+        currently_above := high > retest_ema and close <= retest_ema  // Wicked up but closed below
+
+    // LONGS: Two-step process for bullish trend (only update on confirmed bars)
+    if barstate.isconfirmed
+        if cross_detection_method == "Close"
+            // Close method: Standard cross logic
+            // Step 1: Detect when price moves below retest EMA (the retest/dip)
+            // In PERSISTENT mode: Only require alignment, not full trend
+            // In STRICT mode: Require full trend conditions
+            bool allow_dip = persistent_retest_mode ? bullish_alignment : bullish_trend
+            if currently_below and not price_below_retest_ema and allow_dip
+                price_below_retest_ema := true
+                had_long_retest := false  // Not ready yet, waiting for bounce back up
+            
+            // Step 2: Detect when price moves back above retest EMA after being below (the entry signal)
+            // PERSISTENT MODE: Set flag on cross, let conditions improve later
+            // STRICT MODE: Only set flag if ALL conditions met RIGHT NOW
+            bool allow_cross = persistent_retest_mode ? bullish_alignment : bullish_trend
+            if currently_above and price_below_retest_ema and allow_cross
+                had_long_retest := true   // NOW ready to enter long
+                price_below_retest_ema := false
+                
+                // Debug: Show retest flag activation
+                if show_debug_labels
+                    label.new(bar_index, low, "🎯 RETEST FLAG SET\nLong ready", 
+                             color=color.new(color.blue, 0), textcolor=color.white, 
+                             style=label.style_label_up, size=size.tiny)
+            
+            // Reset retest tracking if trend is lost while waiting for bounce
+            // In PERSISTENT mode: Only reset if alignment is lost
+            // In STRICT mode: Reset if full trend conditions are lost
+            bool trend_still_ok = persistent_retest_mode ? bullish_alignment : bullish_trend
+            if not trend_still_ok and price_below_retest_ema
+                price_below_retest_ema := false
+                had_long_retest := false
+        else  // "Wick"
+            // Wick method: Entry when price touches EMA from above but doesn't close below
+            // PERSISTENT MODE: Set flag on wick, let conditions improve later
+            // STRICT MODE: Only set flag if ALL conditions met RIGHT NOW
+            bool allow_wick = persistent_retest_mode ? bullish_alignment : bullish_trend
+            if currently_below and allow_wick  // Wicked down to EMA but closed above
+                had_long_retest := true  // Ready to enter
+                
+                // Debug: Show retest flag activation
+                if show_debug_labels
+                    label.new(bar_index, low, "🎯 WICK RETEST\nLong ready", 
+                             color=color.new(color.blue, 0), textcolor=color.white, 
+                             style=label.style_label_up, size=size.tiny)
+            else if close < retest_ema or not allow_wick  // If closed below or trend lost, reset
+                had_long_retest := false
+
+    // SHORTS: Two-step process for bearish trend (only update on confirmed bars)
+    if barstate.isconfirmed
+        if cross_detection_method == "Close"
+            // Close method: Standard cross logic
+            // Step 1: Detect when price moves above retest EMA (the retest/bounce)
+            // In PERSISTENT mode: Only require alignment, not full trend
+            // In STRICT mode: Require full trend conditions
+            bool allow_bounce = persistent_retest_mode ? bearish_alignment : bearish_trend
+            if currently_above and not price_above_retest_ema and allow_bounce
+                price_above_retest_ema := true
+                had_short_retest := false  // Not ready yet, waiting for rejection back down
+            
+            // Step 2: Detect when price moves back below retest EMA after being above (the entry signal)
+            // PERSISTENT MODE: Set flag on cross, let conditions improve later
+            // STRICT MODE: Only set flag if ALL conditions met RIGHT NOW
+            bool allow_rejection = persistent_retest_mode ? bearish_alignment : bearish_trend
+            if currently_below and price_above_retest_ema and allow_rejection
+                had_short_retest := true   // NOW ready to enter short
+                price_above_retest_ema := false
+                
+                // Debug: Show retest flag activation
+                if show_debug_labels
+                    label.new(bar_index, high, "🎯 RETEST FLAG SET\nShort ready", 
+                             color=color.new(color.blue, 0), textcolor=color.white, 
+                             style=label.style_label_down, size=size.tiny)
+            
+            // Reset retest tracking if trend is lost while waiting for rejection
+            // In PERSISTENT mode: Only reset if alignment is lost
+            // In STRICT mode: Reset if full trend conditions are lost
+            bool trend_still_ok_short = persistent_retest_mode ? bearish_alignment : bearish_trend
+            if not trend_still_ok_short and price_above_retest_ema
+                price_above_retest_ema := false
+                had_short_retest := false
+        else  // "Wick"
+            // Wick method: Entry when price touches EMA from below but doesn't close above
+            // PERSISTENT MODE: Set flag on wick, let conditions improve later
+            // STRICT MODE: Only set flag if ALL conditions met RIGHT NOW
+            bool allow_wick_short = persistent_retest_mode ? bearish_alignment : bearish_trend
+            if currently_above and allow_wick_short  // Wicked up to EMA but closed below
+                had_short_retest := true  // Ready to enter
+                
+                // Debug: Show retest flag activation
+                if show_debug_labels
+                    label.new(bar_index, high, "🎯 WICK RETEST\nShort ready", 
+                             color=color.new(color.blue, 0), textcolor=color.white, 
+                             style=label.style_label_down, size=size.tiny)
+            else if close > retest_ema or not allow_wick_short  // If closed above or trend lost, reset
+                had_short_retest := false
+
+// Reset flags when trend changes direction (safety net)
+// PERSISTENT MODE: Only reset if alignment is lost (more lenient)
+// STRICT MODE: Reset if full trend conditions are lost
+if persistent_retest_mode
+    // In persistent mode, only reset when alignment is completely lost
+    if not bullish_alignment
+        had_long_retest := false
+        price_below_retest_ema := false
+    
+    if not bearish_alignment
+        had_short_retest := false
+        price_above_retest_ema := false
+else
+    // In strict mode, reset when trend conditions (including spacing) are lost
+    if not bullish_trend
+        had_long_retest := false
+        price_below_retest_ema := false
+
+    if not bearish_trend
+        had_short_retest := false
+        price_above_retest_ema := false
+
+// For add-on positions, check if price tested deeper EMAs (only check enabled EMAs)
+tested_ema2 = false
+tested_ema3 = false
+tested_ema4 = false
+
+if bullish_trend
+    if use_ema2
+        tested_ema2 := close <= ema2 * 1.002
+    if use_ema3
+        tested_ema3 := close <= ema3 * 1.002
+    if use_ema4
+        tested_ema4 := close <= ema4 * 1.002
+
+if bearish_trend
+    if use_ema2
+        tested_ema2 := close >= ema2 * 0.998
+    if use_ema3
+        tested_ema3 := close >= ema3 * 0.998
+    if use_ema4
+        tested_ema4 := close >= ema4 * 0.998
+
+deeper_retest = tested_ema2 or tested_ema3 or tested_ema4
+
+// ========================================
+// SIGNAL TRACKING STATE (Declared here, updated after entry logic)
+// ========================================
+
+// Track simulated position state
+var int current_simulated_stage = 0  // 0=no position, 1=full position, 2=after TP1, 3=after TP2
+var float simulated_tp1_price = na
+var float simulated_tp2_price = na
+var float simulated_tp3_price = na
+
+// Risk Scaling Variables
+var float current_risk_multiplier = 1.0  // Current risk multiplier (starts at 1.0x)
+
+// ========================================
+// POSITION SIZING
+// ========================================
+
+calc_position_size(entry_price, stop_price, risk_dollars) =>
+    risk_per_unit = math.abs(entry_price - stop_price)
+    
+    // Calculate ideal quantity based on target risk
+    // This ensures R multiples are accurate: 2.5R = 2.5x your risk
+    ideal_qty = risk_dollars / risk_per_unit
+    
+    // Calculate max position size based on margin limits
+    max_notional = account_size * leverage
+    max_allowed_notional = max_notional * (max_position_pct / 100)
+    max_qty = max_allowed_notional / entry_price
+    
+    // Use the smaller of the two (never exceed margin limits)
+    // If ideal_qty > max_qty, we'll risk less than target but stay within margin
+    // If ideal_qty < max_qty, we'll risk our target amount
+    qty = math.min(ideal_qty, max_qty)
+    
+    qty
+
+// Determine current risk amount (with optional scaling and simulated equity)
+get_current_risk() =>
+    // Determine base equity (static account size or simulated equity)
+    base_equity = (use_dynamic_equity and use_risk_scaling) ? current_simulated_equity : account_size
+    
+    // Calculate base risk
+    base_risk = risk_in_dollars ? risk_dollars : (base_equity * (risk_pct / 100))
+    
+    // Apply risk multiplier if scaling enabled
+    scaled_risk = use_risk_scaling ? (base_risk * current_risk_multiplier) : base_risk
+    
+    scaled_risk
+
+// ========================================
+// ENTRY LOGIC
+// ========================================
+
+// Entry conditions - simple single position
+bool can_enter_long = false
+bool can_enter_short = false
+
+// Check if stop loss requirements are met based on method
+bool stop_requirement_long = (stop_loss_method == "ATR" or stop_loss_method == "EMA") ? true : not na(last_pivot_low)
+bool stop_requirement_short = (stop_loss_method == "ATR" or stop_loss_method == "EMA") ? true : not na(last_pivot_high)
+
+// Apply additional filters (only if enabled)
+bool additional_filters_long = true
+bool additional_filters_short = true
+
+if use_cvd_filter
+    additional_filters_long := additional_filters_long and cvd_long_ok
+    additional_filters_short := additional_filters_short and cvd_short_ok
+
+if use_rsi_filter
+    additional_filters_long := additional_filters_long and rsi_long_ok
+    additional_filters_short := additional_filters_short and rsi_short_ok
+
+if use_macd_filter
+    additional_filters_long := additional_filters_long and macd_long_ok
+    additional_filters_short := additional_filters_short and macd_short_ok
+
+if use_orderflow_filter
+    additional_filters_long := additional_filters_long and of_long_ok
+    additional_filters_short := additional_filters_short and of_short_ok
+
+if use_volatility_filter
+    additional_filters_long := additional_filters_long and vol_ok
+    additional_filters_short := additional_filters_short and vol_ok
+
+if use_trend_time_filter
+    additional_filters_long := additional_filters_long and trend_time_long_ok
+    additional_filters_short := additional_filters_short and trend_time_short_ok
+
+if use_htf_cooldown
+    additional_filters_long := additional_filters_long and htf_cooldown_ok
+    additional_filters_short := additional_filters_short and htf_cooldown_ok
+
+if use_post_trade_cooldown
+    additional_filters_long := additional_filters_long and post_trade_cooldown_ok
+    additional_filters_short := additional_filters_short and post_trade_cooldown_ok
+
+// Check for new signals (indicator mode - always ready for signals)
+    can_enter_long := bullish_trend and had_long_retest and stop_requirement_long and htf_filter_long and ema_order_filter_long and additional_filters_long and (trade_direction == "Long" or trade_direction == "Both")
+    can_enter_short := bearish_trend and had_short_retest and stop_requirement_short and htf_filter_short and ema_order_filter_short and additional_filters_short and (trade_direction == "Short" or trade_direction == "Both")
+
+// ========================================
+// RETEST FLAG MANAGEMENT (Clear flags when conditions fail)
+// ========================================
+// STRICT MODE: Clear flags immediately when conditions fail
+// PERSISTENT MODE: Keep flags active, let conditions improve (old v56 behavior)
+
+// Only clear flags in STRICT mode (when persistent_retest_mode is OFF)
+if not persistent_retest_mode and had_long_retest and not can_enter_long
+    had_long_retest := false
+    if show_debug_labels
+        // Build detailed reason for why retest flag was cleared
+        clear_reasons = "🔄 RETEST CLEARED\n"
+        
+        if not bullish_trend
+            clear_reasons := clear_reasons + "❌ Trend: "
+            if not bullish_alignment
+                clear_reasons := clear_reasons + "No alignment\n"
+            else if not good_ema_spacing
+                clear_reasons := clear_reasons + "Spacing insufficient\n"
+        
+        if not stop_requirement_long
+            clear_reasons := clear_reasons + "❌ No pivot low (SL)\n"
+        
+        if not htf_filter_long and (use_1h_filter or use_4h_filter)
+            clear_reasons := clear_reasons + "❌ HTF filter\n"
+        
+        if not ema_order_filter_long and use_ema_order_filter
+            clear_reasons := clear_reasons + "❌ EMA order\n"
+        
+        if not additional_filters_long
+            if use_cvd_filter and not cvd_long_ok
+                clear_reasons := clear_reasons + "❌ CVD\n"
+            if use_rsi_filter and not rsi_long_ok
+                clear_reasons := clear_reasons + "❌ RSI (" + str.tostring(rsi_value, "#.#") + ")\n"
+            if use_macd_filter and not macd_long_ok
+                clear_reasons := clear_reasons + "❌ MACD\n"
+            if use_orderflow_filter and not of_long_ok
+                clear_reasons := clear_reasons + "❌ Orderflow\n"
+            if use_volatility_filter and not vol_ok
+                clear_reasons := clear_reasons + "❌ Volatility\n"
+            if use_trend_time_filter and not trend_time_long_ok
+                clear_reasons := clear_reasons + "❌ Trend duration\n"
+            if use_htf_cooldown and not htf_cooldown_ok
+                clear_reasons := clear_reasons + "❌ HTF cooldown\n"
+            if use_post_trade_cooldown and not post_trade_cooldown_ok
+                clear_reasons := clear_reasons + "❌ Post-trade cooldown\n"
+        
+        label.new(bar_index, low, clear_reasons, 
+                 color=color.new(color.gray, 0), textcolor=color.white, 
+                 style=label.style_label_up, size=size.tiny)
+
+if not persistent_retest_mode and had_short_retest and not can_enter_short
+    had_short_retest := false
+    if show_debug_labels
+        // Build detailed reason for why retest flag was cleared
+        clear_reasons = "🔄 RETEST CLEARED\n"
+        
+        if not bearish_trend
+            clear_reasons := clear_reasons + "❌ Trend: "
+            if not bearish_alignment
+                clear_reasons := clear_reasons + "No alignment\n"
+            else if not good_ema_spacing
+                clear_reasons := clear_reasons + "Spacing insufficient\n"
+        
+        if not stop_requirement_short
+            clear_reasons := clear_reasons + "❌ No pivot high (SL)\n"
+        
+        if not htf_filter_short and (use_1h_filter or use_4h_filter)
+            clear_reasons := clear_reasons + "❌ HTF filter\n"
+        
+        if not ema_order_filter_short and use_ema_order_filter
+            clear_reasons := clear_reasons + "❌ EMA order\n"
+        
+        if not additional_filters_short
+            if use_cvd_filter and not cvd_short_ok
+                clear_reasons := clear_reasons + "❌ CVD\n"
+            if use_rsi_filter and not rsi_short_ok
+                clear_reasons := clear_reasons + "❌ RSI (" + str.tostring(rsi_value, "#.#") + ")\n"
+            if use_macd_filter and not macd_short_ok
+                clear_reasons := clear_reasons + "❌ MACD\n"
+            if use_orderflow_filter and not of_short_ok
+                clear_reasons := clear_reasons + "❌ Orderflow\n"
+            if use_volatility_filter and not vol_ok
+                clear_reasons := clear_reasons + "❌ Volatility\n"
+            if use_trend_time_filter and not trend_time_short_ok
+                clear_reasons := clear_reasons + "❌ Trend duration\n"
+            if use_htf_cooldown and not htf_cooldown_ok
+                clear_reasons := clear_reasons + "❌ HTF cooldown\n"
+            if use_post_trade_cooldown and not post_trade_cooldown_ok
+                clear_reasons := clear_reasons + "❌ Post-trade cooldown\n"
+        
+        label.new(bar_index, high, clear_reasons, 
+                 color=color.new(color.gray, 0), textcolor=color.white, 
+                 style=label.style_label_down, size=size.tiny)
+
+// ========================================
+// SIGNAL TRACKING & COUNTING
+// ========================================
+
+// Track signals and update simulated state
+if can_enter_long and not simulated_long_position and not simulated_short_position
+    total_long_signals := total_long_signals + 1
+    consecutive_long_signals := consecutive_long_signals + 1
+    consecutive_short_signals := 0
+
+    if consecutive_long_signals > max_consecutive_longs
+        max_consecutive_longs := consecutive_long_signals
+
+if can_enter_short and not simulated_long_position and not simulated_short_position
+    total_short_signals := total_short_signals + 1
+    consecutive_short_signals := consecutive_short_signals + 1
+    consecutive_long_signals := 0
+
+    if consecutive_short_signals > max_consecutive_shorts
+        max_consecutive_shorts := consecutive_short_signals
+
+// ========================================
+// TRADE BOX TRACKING
+// ========================================
+
+// Arrays to store trade box data
+var array<line> trade_entry_lines = array.new<line>()
+var array<line> trade_stop_lines = array.new<line>()
+var array<line> trade_tp1_lines = array.new<line>()
+var array<line> trade_tp2_lines = array.new<line>()
+var array<linefill> trade_profit_fills = array.new<linefill>()
+var array<linefill> trade_risk_fills = array.new<linefill>()
+var array<label> trade_labels = array.new<label>()
+
+// Function to create trade box (similar to position size calculator)
+create_trade_box(entry_bar, entry_price, stop_price, tp1_price, tp2_price, is_long, pos_label) =>
+    if show_trade_boxes
+        // Create lines
+        entry_line = line.new(entry_bar, entry_price, entry_bar + 20, entry_price, color=color.blue, width=2)
+        stop_line = line.new(entry_bar, stop_price, entry_bar + 20, stop_price, color=color.red, width=2)
+        tp1_line = line.new(entry_bar, tp1_price, entry_bar + 20, tp1_price, color=color.aqua, width=1, style=line.style_dashed)
+        tp2_line = line.new(entry_bar, tp2_price, entry_bar + 20, tp2_price, color=color.lime, width=2, style=line.style_dashed)
+        
+        // Create fills (similar to position size calculator)
+        profit_fill = linefill.new(entry_line, tp2_line, is_long ? color.new(color.green, 85) : color.new(color.red, 85))
+        risk_fill = linefill.new(entry_line, stop_line, color.new(color.red, 85))
+        
+        // Create label
+        label_y = is_long ? entry_price : entry_price
+        trade_label = label.new(entry_bar, label_y, pos_label, color=is_long ? color.new(color.green, 0) : color.new(color.red, 0), textcolor=color.white, style=is_long ? label.style_label_up : label.style_label_down, size=size.normal)
+        
+        // Store references
+        array.push(trade_entry_lines, entry_line)
+        array.push(trade_stop_lines, stop_line)
+        array.push(trade_tp1_lines, tp1_line)
+        array.push(trade_tp2_lines, tp2_line)
+        array.push(trade_profit_fills, profit_fill)
+        array.push(trade_risk_fills, risk_fill)
+        array.push(trade_labels, trade_label)
+        
+        // Limit to max boxes
+        if array.size(trade_entry_lines) > max_boxes_to_show
+            // Remove oldest box elements
+            line.delete(array.shift(trade_entry_lines))
+            line.delete(array.shift(trade_stop_lines))
+            line.delete(array.shift(trade_tp1_lines))
+            line.delete(array.shift(trade_tp2_lines))
+            linefill.delete(array.shift(trade_profit_fills))
+            linefill.delete(array.shift(trade_risk_fills))
+            label.delete(array.shift(trade_labels))
+
+// ========================================
+// ENTRY REJECTION DEBUG LABELS
+// ========================================
+
+// Show debug labels for rejected entries (helps identify why trades aren't opening)
+if show_debug_labels and barstate.isconfirmed
+    // CRITICAL: ONLY show rejection labels when there WAS a retest signal
+    // If no retest, don't clutter the chart - we wouldn't trade there anyway
+    bool had_long_retest_but_rejected = had_long_retest and not can_enter_long and bullish_alignment
+    
+    if had_long_retest_but_rejected
+        debug_reasons = ""
+        
+        // Retest happened, so show what ELSE is blocking entry
+        if not bullish_trend
+            debug_reasons := debug_reasons + "❌ Trend: "
+            if not bullish_alignment
+                debug_reasons := debug_reasons + "No alignment\n"
+            else if not good_ema_spacing
+                debug_reasons := debug_reasons + "Spacing insufficient\n"
+                debug_reasons := debug_reasons + "  Spacing1: " + str.tostring(spacing_1_pct, "#.##") + "% (need " + str.tostring(min_spacing_1, "#.##") + "%)\n"
+                debug_reasons := debug_reasons + "  Spacing2: " + str.tostring(spacing_2_pct, "#.##") + "% (need " + str.tostring(min_spacing_2, "#.##") + "%)\n"
+        
+        if not stop_requirement_long
+            debug_reasons := debug_reasons + "❌ No pivot low (SL)\n"
+        
+        if not htf_filter_long and (use_1h_filter or use_4h_filter)
+            debug_reasons := debug_reasons + "❌ HTF filter reject\n"
+            if use_1h_filter and not h1_bullish_bias
+                debug_reasons := debug_reasons + "  1H: Price < MA\n"
+            if use_4h_filter and not h4_bullish_bias
+                debug_reasons := debug_reasons + "  4H: Price < EMA\n"
+        
+        if not ema_order_filter_long and use_ema_order_filter
+            debug_reasons := debug_reasons + "❌ EMA order filter\n"
+        
+        if not additional_filters_long
+            if use_cvd_filter and not cvd_long_ok
+                debug_reasons := debug_reasons + "❌ CVD filter\n"
+            if use_rsi_filter and not rsi_long_ok
+                debug_reasons := debug_reasons + "❌ RSI filter (" + str.tostring(rsi_value, "#.#") + ")\n"
+            if use_macd_filter and not macd_long_ok
+                debug_reasons := debug_reasons + "❌ MACD filter\n"
+            if use_orderflow_filter and not of_long_ok
+                debug_reasons := debug_reasons + "❌ Orderflow (" + str.tostring(of_bullish_pct, "#.#") + "%)\n"
+            if use_volatility_filter and not vol_ok
+                debug_reasons := debug_reasons + "❌ Volatility filter\n"
+            if use_trend_time_filter and not trend_time_long_ok
+                current_bars = bullish_alignment_123 ? bullish_trend_bars : 0
+                bars_ok = current_bars >= trend_min_bars_required
+                
+                if not bars_ok
+                    debug_reasons := debug_reasons + "❌ Trend duration (" + str.tostring(current_bars) + "/" + str.tostring(trend_min_bars_required) + " bars, EMA1-3)\n"
+                else if trend_check_ema_separation and not trend_emas_separating_long
+                    debug_reasons := debug_reasons + "❌ Trend duration - EMAs converging (bars OK: " + str.tostring(current_bars) + "/" + str.tostring(trend_min_bars_required) + ")\n"
+                if use_htf_cooldown and not htf_cooldown_ok
+                    debug_reasons := debug_reasons + "❌ HTF cooldown active\n"
+                if use_post_trade_cooldown and not post_trade_cooldown_ok
+                    hours_left = (post_trade_cooldown_bars - bars_since_trade_close) / get_bars_per_hour()
+                    debug_reasons := debug_reasons + "❌ Post-trade cooldown (" + str.tostring(hours_left, "#.#") + "h left)\n"
+        
+        if debug_reasons != ""
+            label.new(bar_index, high, "🚫 LONG REJECTED\n" + debug_reasons,
+                     color=color.new(color.orange, 0), textcolor=color.white, 
+                     style=label.style_label_down, size=size.small)
+    
+    // CRITICAL: ONLY show rejection labels when there WAS a retest signal
+    // If no retest, don't clutter the chart - we wouldn't trade there anyway
+    bool had_short_retest_but_rejected = had_short_retest and not can_enter_short and bearish_alignment
+    
+    if had_short_retest_but_rejected
+        debug_reasons = ""
+        
+        // Retest happened, so show what ELSE is blocking entry
+        if not bearish_trend
+            debug_reasons := debug_reasons + "❌ Trend: "
+            if not bearish_alignment
+                debug_reasons := debug_reasons + "No alignment\n"
+            else if not good_ema_spacing
+                debug_reasons := debug_reasons + "Spacing insufficient\n"
+                debug_reasons := debug_reasons + "  Spacing1: " + str.tostring(spacing_1_pct, "#.##") + "% (need " + str.tostring(min_spacing_1, "#.##") + "%)\n"
+                debug_reasons := debug_reasons + "  Spacing2: " + str.tostring(spacing_2_pct, "#.##") + "% (need " + str.tostring(min_spacing_2, "#.##") + "%)\n"
+        
+        if not stop_requirement_short
+            debug_reasons := debug_reasons + "❌ No pivot high (SL)\n"
+        
+        if not htf_filter_short and (use_1h_filter or use_4h_filter)
+            debug_reasons := debug_reasons + "❌ HTF filter reject\n"
+            if use_1h_filter and not h1_bearish_bias
+                debug_reasons := debug_reasons + "  1H: Price > MA\n"
+            if use_4h_filter and not h4_bearish_bias
+                debug_reasons := debug_reasons + "  4H: Price > EMA\n"
+        
+        if not ema_order_filter_short and use_ema_order_filter
+            debug_reasons := debug_reasons + "❌ EMA order filter\n"
+        
+        if not additional_filters_short
+            if use_cvd_filter and not cvd_short_ok
+                debug_reasons := debug_reasons + "❌ CVD filter\n"
+            if use_rsi_filter and not rsi_short_ok
+                debug_reasons := debug_reasons + "❌ RSI filter (" + str.tostring(rsi_value, "#.#") + ")\n"
+            if use_macd_filter and not macd_short_ok
+                debug_reasons := debug_reasons + "❌ MACD filter\n"
+            if use_orderflow_filter and not of_short_ok
+                debug_reasons := debug_reasons + "❌ Orderflow (" + str.tostring(of_bearish_pct, "#.#") + "%)\n"
+            if use_volatility_filter and not vol_ok
+                debug_reasons := debug_reasons + "❌ Volatility filter\n"
+            if use_trend_time_filter and not trend_time_short_ok
+                current_bars = bearish_alignment_123 ? bearish_trend_bars : 0
+                bars_ok = current_bars >= trend_min_bars_required
+                
+                if not bars_ok
+                    debug_reasons := debug_reasons + "❌ Trend duration (" + str.tostring(current_bars) + "/" + str.tostring(trend_min_bars_required) + " bars, EMA1-3)\n"
+                else if trend_check_ema_separation and not trend_emas_separating_short
+                    debug_reasons := debug_reasons + "❌ Trend duration - EMAs converging (bars OK: " + str.tostring(current_bars) + "/" + str.tostring(trend_min_bars_required) + ")\n"
+                if use_htf_cooldown and not htf_cooldown_ok
+                    debug_reasons := debug_reasons + "❌ HTF cooldown active\n"
+                if use_post_trade_cooldown and not post_trade_cooldown_ok
+                    hours_left = (post_trade_cooldown_bars - bars_since_trade_close) / get_bars_per_hour()
+                    debug_reasons := debug_reasons + "❌ Post-trade cooldown (" + str.tostring(hours_left, "#.#") + "h left)\n"
+        
+        if debug_reasons != ""
+            label.new(bar_index, low, "🚫 SHORT REJECTED\n" + debug_reasons,
+                     color=color.new(color.orange, 0), textcolor=color.white, 
+                     style=label.style_label_up, size=size.small)
+
+// ========================================
+// TRADE EXECUTION
+// ========================================
+
+// Long Signal
+if can_enter_long
+    // Debug: Show entry acceptance
+    if show_debug_labels
+        label.new(bar_index, low, "✅ LONG SIGNAL\nAll conditions met",
+                 color=color.new(color.green, 0), textcolor=color.white, 
+                 style=label.style_label_up, size=size.small)
+    
+    entry = close
+    float stop = na
+    
+    // Calculate stop based on selected method
+    if stop_loss_method == "ATR"
+        // ATR-based stop: Entry - (ATR × Multiplier)
+        stop := entry - (atr_value * atr_multiplier)
+    else if stop_loss_method == "EMA"
+        // EMA-based stop: Use selected EMA as stop level
+        if stop_ema_choice == "EMA1" and use_ema1
+            stop := ema1
+        else if stop_ema_choice == "EMA2" and use_ema2
+            stop := ema2
+        else if stop_ema_choice == "EMA3" and use_ema3
+            stop := ema3
+        else if stop_ema_choice == "EMA4" and use_ema4
+            stop := ema4
+        else
+            // Fallback: Use first enabled EMA if selected EMA is disabled
+            if use_ema1
+                stop := ema1
+            else if use_ema2
+                stop := ema2
+            else if use_ema3
+                stop := ema3
+            else if use_ema4
+                stop := ema4
+    else
+        // Pivot-based stop: Use last pivot low
+        stop := last_pivot_low
+    
+    risk_distance = entry - stop
+    
+    // Validate stop placement and distance
+    min_stop_distance = entry * (min_stop_distance_pct / 100)
+    max_stop_distance = entry * (max_stop_distance_pct / 100)
+    
+    // Critical checks for long entries:
+    // 1. Stop must be BELOW entry (risk_distance > 0)
+    // 2. Stop must be at least min distance away
+    // 3. Stop must not be more than max distance away
+    // 4. For pivot method, pivot must exist
+    bool stop_below_entry = stop < entry
+    bool stop_min_ok = risk_distance >= min_stop_distance
+    bool stop_max_ok = risk_distance <= max_stop_distance
+    bool stop_exists = not na(stop)
+    bool stop_valid = stop_below_entry and stop_min_ok and stop_max_ok and stop_exists
+    
+    if stop_valid
+        current_risk = get_current_risk()
+        qty = calc_position_size(entry, stop, current_risk)
+        
+        // Debug: Check if qty is valid
+        bool qty_valid = not na(qty) and qty > 0
+        
+        if qty_valid
+            // Store entry data for stage tracking
+            simulated_entry_price := entry
+            simulated_stop_price := stop
+            current_simulated_stage := 1
+            
+            if profit_mode == "Basic"
+                // BASIC MODE: Single TP and SL
+                tp_target = entry + (risk_distance * basic_tp_rr)
+                
+                // Create trade box
+                create_trade_box(bar_index, entry, stop, tp_target, tp_target, true, "LONG SIGNAL")
+            
+            else
+                // ADVANCED MODE: Will be handled by stage monitoring
+                tp1_target = entry + (risk_distance * adv_tp1_rr)
+                tp2_target = entry + (risk_distance * adv_tp2_rr)
+                tp3_target = entry + (risk_distance * adv_tp3_rr)
+                
+                // Store TP levels for simulation
+                simulated_tp1_price := tp1_target
+                simulated_tp2_price := tp2_target
+                simulated_tp3_price := tp3_target
+                
+                // Create trade box showing all 3 TPs
+                create_trade_box(bar_index, entry, stop, tp1_target, tp3_target, true, "LONG SIGNAL")
+            
+            // Reset retest flag after entry
+            had_long_retest := false
+        else
+            // DEBUG: Qty invalid
+            if show_debug_labels
+                debug_text = "❌ QTY INVALID\nQty: " + str.tostring(qty, "#.####") + "\nRisk: $" + str.tostring(current_risk, "#")
+                label.new(bar_index, high, debug_text, color=color.new(color.orange, 0), textcolor=color.white, style=label.style_label_down, size=size.small)
+    else
+        // DEBUG: Stop validation failed
+        if show_debug_labels
+            debug_text = "❌ STOP INVALID\n"
+            debug_text := debug_text + "Stop: $" + str.tostring(stop, "#.##") + " | Entry: $" + str.tostring(entry, "#.##") + "\n"
+            debug_text := debug_text + "Risk Dist: $" + str.tostring(risk_distance, "#.##") + " (" + str.tostring(risk_distance/entry*100, "#.##") + "%)\n"
+            debug_text := debug_text + "Min: $" + str.tostring(min_stop_distance, "#.##") + " | Max: $" + str.tostring(max_stop_distance, "#.##") + "\n"
+            if not stop_below_entry
+                debug_text := debug_text + "⚠ Stop NOT below entry\n"
+            if not stop_min_ok
+                debug_text := debug_text + "⚠ Stop TOO CLOSE (< " + str.tostring(min_stop_distance_pct, "#.#") + "%)\n"
+            if not stop_max_ok
+                debug_text := debug_text + "⚠ Stop TOO FAR (> " + str.tostring(max_stop_distance_pct, "#.#") + "%)\n"
+            if not stop_exists
+                debug_text := debug_text + "⚠ Stop is NA\n"
+            label.new(bar_index, high, debug_text, color=color.new(color.red, 0), textcolor=color.white, style=label.style_label_down, size=size.small)
+
+// Short Signal
+if can_enter_short
+    // Debug: Show entry acceptance
+    if show_debug_labels
+        label.new(bar_index, high, "✅ SHORT SIGNAL\nAll conditions met",
+                 color=color.new(color.red, 0), textcolor=color.white, 
+                 style=label.style_label_down, size=size.small)
+    
+    entry = close
+    float stop = na
+    
+    // Calculate stop based on selected method
+    if stop_loss_method == "ATR"
+        // ATR-based stop: Entry + (ATR × Multiplier)
+        stop := entry + (atr_value * atr_multiplier)
+    else if stop_loss_method == "EMA"
+        // EMA-based stop: Use selected EMA as stop level
+        if stop_ema_choice == "EMA1" and use_ema1
+            stop := ema1
+        else if stop_ema_choice == "EMA2" and use_ema2
+            stop := ema2
+        else if stop_ema_choice == "EMA3" and use_ema3
+            stop := ema3
+        else if stop_ema_choice == "EMA4" and use_ema4
+            stop := ema4
+        else
+            // Fallback: Use first enabled EMA if selected EMA is disabled
+            if use_ema1
+                stop := ema1
+            else if use_ema2
+                stop := ema2
+            else if use_ema3
+                stop := ema3
+            else if use_ema4
+                stop := ema4
+    else
+        // Pivot-based stop: Use last pivot high
+        stop := last_pivot_high
+    
+    risk_distance = stop - entry
+    
+    // Validate stop placement and distance
+    min_stop_distance = entry * (min_stop_distance_pct / 100)
+    max_stop_distance = entry * (max_stop_distance_pct / 100)
+    
+    // Critical checks for short entries:
+    // 1. Stop must be ABOVE entry (risk_distance > 0)
+    // 2. Stop must be at least min distance away
+    // 3. Stop must not be more than max distance away
+    // 4. For pivot method, pivot must exist
+    bool stop_above_entry = stop > entry
+    bool stop_min_ok = risk_distance >= min_stop_distance
+    bool stop_max_ok = risk_distance <= max_stop_distance
+    bool stop_exists = not na(stop)
+    bool stop_valid = stop_above_entry and stop_min_ok and stop_max_ok and stop_exists
+    
+    if stop_valid
+        current_risk = get_current_risk()
+        qty = calc_position_size(entry, stop, current_risk)
+        
+        // Debug: Check if qty is valid
+        bool qty_valid = not na(qty) and qty > 0
+        
+        if qty_valid
+            // Store entry data for stage tracking
+            simulated_entry_price := entry
+            simulated_stop_price := stop
+            current_simulated_stage := 1
+            
+            if profit_mode == "Basic"
+                // BASIC MODE: Single TP and SL
+                tp_target = entry - (risk_distance * basic_tp_rr)
+                
+                // Create trade box
+                create_trade_box(bar_index, entry, stop, tp_target, tp_target, false, "SHORT SIGNAL")
+            
+            else
+                // ADVANCED MODE: Will be handled by stage monitoring
+                tp1_target = entry - (risk_distance * adv_tp1_rr)
+                tp2_target = entry - (risk_distance * adv_tp2_rr)
+                tp3_target = entry - (risk_distance * adv_tp3_rr)
+                
+                // Store TP levels for simulation
+                simulated_tp1_price := tp1_target
+                simulated_tp2_price := tp2_target
+                simulated_tp3_price := tp3_target
+                
+                // Create trade box showing all 3 TPs
+                create_trade_box(bar_index, entry, stop, tp1_target, tp3_target, false, "SHORT SIGNAL")
+            
+            // Reset retest flag after entry
+            had_short_retest := false
+        else
+            // DEBUG: Qty invalid
+            if show_debug_labels
+                debug_text = "❌ QTY INVALID\nQty: " + str.tostring(qty, "#.####") + "\nRisk: $" + str.tostring(current_risk, "#")
+                label.new(bar_index, low, debug_text, color=color.new(color.orange, 0), textcolor=color.white, style=label.style_label_up, size=size.small)
+    else
+        // DEBUG: Stop validation failed
+        if show_debug_labels
+            debug_text = "❌ STOP INVALID\n"
+            debug_text := debug_text + "Stop: $" + str.tostring(stop, "#.##") + " | Entry: $" + str.tostring(entry, "#.##") + "\n"
+            debug_text := debug_text + "Risk Dist: $" + str.tostring(risk_distance, "#.##") + " (" + str.tostring(risk_distance/entry*100, "#.##") + "%)\n"
+            debug_text := debug_text + "Min: $" + str.tostring(min_stop_distance, "#.##") + " | Max: $" + str.tostring(max_stop_distance, "#.##") + "\n"
+            if not stop_above_entry
+                debug_text := debug_text + "⚠ Stop NOT above entry\n"
+            if not stop_min_ok
+                debug_text := debug_text + "⚠ Stop TOO CLOSE (< " + str.tostring(min_stop_distance_pct, "#.#") + "%)\n"
+            if not stop_max_ok
+                debug_text := debug_text + "⚠ Stop TOO FAR (> " + str.tostring(max_stop_distance_pct, "#.#") + "%)\n"
+            if not stop_exists
+                debug_text := debug_text + "⚠ Stop is NA\n"
+            label.new(bar_index, low, debug_text, color=color.new(color.red, 0), textcolor=color.white, style=label.style_label_up, size=size.small)
+
+// ========================================
+// SIMULATED POSITION MONITORING (Advanced Mode)
+// ========================================
+
+// Helper function to calculate current simulated profit
+simulated_profit() =>
+    if simulated_long_position
+        (close - simulated_entry_price) * simulated_position_size
+    else if simulated_short_position
+        (simulated_entry_price - close) * simulated_position_size
+    else
+        0.0
+
+// Monitor simulated positions for exits
+if profit_mode == "Advanced" and (simulated_long_position or simulated_short_position) and not na(simulated_entry_price)
+    current_profit = simulated_profit()
+
+    if simulated_long_position
+        // Check for TP1 hit
+        if current_simulated_stage == 1 and not na(simulated_tp1_price) and close >= simulated_tp1_price
+            current_simulated_stage := 2
+            // Simulate partial close at TP1
+            if show_debug_labels
+                label.new(bar_index, high, "🎯 TP1 HIT\n+" + str.tostring(current_profit * adv_tp1_pct / 100, "#.##"), color=color.green, textcolor=color.white, style=label.style_label_down, size=size.small)
+
+        // Check for TP2 hit
+        else if current_simulated_stage == 2 and not na(simulated_tp2_price) and close >= simulated_tp2_price
+            current_simulated_stage := 3
+            if show_debug_labels
+                label.new(bar_index, high, "🎯 TP2 HIT\n+" + str.tostring(current_profit * adv_tp2_pct / 100, "#.##"), color=color.green, textcolor=color.white, style=label.style_label_down, size=size.small)
+
+        // Check for TP3 hit
+        else if current_simulated_stage == 3 and not na(simulated_tp3_price) and close >= simulated_tp3_price
+            current_simulated_stage := 4
+            simulated_long_position := false
+            simulated_short_position := false
+            simulated_entry_price := na
+            simulated_stop_price := na
+            current_simulated_stage := 0
+            last_trade_close_bar := bar_index  // Update cooldown tracking
+            if show_debug_labels
+                label.new(bar_index, high, "🎯 TP3 HIT\nFinal Exit", color=color.green, textcolor=color.white, style=label.style_label_down, size=size.small)
+
+        // Check for stop loss hit
+        else if not na(simulated_stop_price) and close <= simulated_stop_price
+            simulated_long_position := false
+            simulated_short_position := false
+            simulated_entry_price := na
+            simulated_stop_price := na
+            current_simulated_stage := 0
+            last_trade_close_bar := bar_index  // Update cooldown tracking
+            if show_debug_labels
+                label.new(bar_index, low, "❌ STOP LOSS\n-" + str.tostring(simulated_position_size, "#.##"), color=color.red, textcolor=color.white, style=label.style_label_up, size=size.small)
+
+    else if simulated_short_position
+        // Check for TP1 hit (shorts)
+        if current_simulated_stage == 1 and not na(simulated_tp1_price) and close <= simulated_tp1_price
+            current_simulated_stage := 2
+            if show_debug_labels
+                label.new(bar_index, low, "🎯 TP1 HIT\n+" + str.tostring(current_profit * adv_tp1_pct / 100, "#.##"), color=color.green, textcolor=color.white, style=label.style_label_up, size=size.small)
+
+        // Check for TP2 hit (shorts)
+        else if current_simulated_stage == 2 and not na(simulated_tp2_price) and close <= simulated_tp2_price
+            current_simulated_stage := 3
+            if show_debug_labels
+                label.new(bar_index, low, "🎯 TP2 HIT\n+" + str.tostring(current_profit * adv_tp2_pct / 100, "#.##"), color=color.green, textcolor=color.white, style=label.style_label_up, size=size.small)
+
+        // Check for TP3 hit (shorts)
+        else if current_simulated_stage == 3 and not na(simulated_tp3_price) and close <= simulated_tp3_price
+            current_simulated_stage := 4
+            simulated_long_position := false
+            simulated_short_position := false
+            simulated_entry_price := na
+            simulated_stop_price := na
+            current_simulated_stage := 0
+            last_trade_close_bar := bar_index  // Update cooldown tracking
+            if show_debug_labels
+                label.new(bar_index, low, "🎯 TP3 HIT\nFinal Exit", color=color.green, textcolor=color.white, style=label.style_label_up, size=size.small)
+
+        // Check for stop loss hit (shorts)
+        else if not na(simulated_stop_price) and close >= simulated_stop_price
+            simulated_long_position := false
+            simulated_short_position := false
+            simulated_entry_price := na
+            simulated_stop_price := na
+            current_simulated_stage := 0
+            last_trade_close_bar := bar_index  // Update cooldown tracking
+            if show_debug_labels
+                label.new(bar_index, high, "❌ STOP LOSS\n-" + str.tostring(simulated_position_size, "#.##"), color=color.red, textcolor=color.white, style=label.style_label_down, size=size.small)
+
+// ========================================
+// EMA CROSS EXIT SIMULATION (Trend Change Detection)
+// ========================================
+
+if exit_on_ema_cross
+    // Determine which two EMAs to use for cross detection (first two enabled)
+    float cross_ema_fast = na
+    float cross_ema_slow = na
+    
+    // Find first enabled EMA (fast)
+    if use_ema1
+        cross_ema_fast := ema1
+        // Find second enabled EMA (slow)
+        if use_ema2
+            cross_ema_slow := ema2
+        else if use_ema3
+            cross_ema_slow := ema3
+        else if use_ema4
+            cross_ema_slow := ema4
+    else if use_ema2
+        cross_ema_fast := ema2
+        // Find second enabled EMA (slow)
+        if use_ema3
+            cross_ema_slow := ema3
+        else if use_ema4
+            cross_ema_slow := ema4
+    else if use_ema3
+        cross_ema_fast := ema3
+        // Find second enabled EMA (slow)
+        if use_ema4
+            cross_ema_slow := ema4
+    
+    // Only check cross if we have at least two enabled EMAs
+    if not na(cross_ema_fast) and not na(cross_ema_slow)
+        // Close simulated longs when fast EMA crosses below slow EMA (bearish signal)
+        if simulated_long_position and cross_ema_fast < cross_ema_slow
+            simulated_long_position := false
+            simulated_short_position := false
+            simulated_entry_price := na
+            simulated_stop_price := na
+            current_simulated_stage := 0
+            last_trade_close_bar := bar_index  // Update cooldown tracking
+            if show_debug_labels
+                label.new(bar_index, low, "🔄 EMA CROSS EXIT\nTrend Change", color=color.orange, textcolor=color.white, style=label.style_label_up, size=size.small)
+
+        // Close simulated shorts when fast EMA crosses above slow EMA (bullish signal)
+        if simulated_short_position and cross_ema_fast > cross_ema_slow
+            simulated_long_position := false
+            simulated_short_position := false
+            simulated_entry_price := na
+            simulated_stop_price := na
+            current_simulated_stage := 0
+            last_trade_close_bar := bar_index  // Update cooldown tracking
+            if show_debug_labels
+                label.new(bar_index, high, "🔄 EMA CROSS EXIT\nTrend Change", color=color.orange, textcolor=color.white, style=label.style_label_down, size=size.small)
+
+// ========================================
+// VISUALIZATIONS
+// ========================================
+
+// Plot EMAs (only if enabled and show_emas is true)
+p_ema1 = plot(show_emas and use_ema1 ? ema1 : na, "EMA 1", color=color.new(color.yellow, 0), linewidth=2)
+p_ema2 = plot(show_emas and use_ema2 ? ema2 : na, "EMA 2", color=color.new(color.orange, 0), linewidth=2)
+p_ema3 = plot(show_emas and use_ema3 ? ema3 : na, "EMA 3", color=color.new(color.blue, 0), linewidth=2)
+p_ema4 = plot(show_emas and use_ema4 ? ema4 : na, "EMA 4", color=color.new(color.purple, 0), linewidth=2)
+
+// EMA Fills (using ternary operators - fills must be at global scope)
+// Main fill between first and last enabled EMAs - all combinations
+fill(p_ema1, p_ema4, color= use_ema1 and use_ema4 and bullish_alignment and show_ema_fill ? color.new(color.green, 85) : na, title="Bullish Zone (1-4)")
+fill(p_ema1, p_ema4, color= use_ema1 and use_ema4 and bearish_alignment and show_ema_fill ? color.new(color.red, 85) : na, title="Bearish Zone (1-4)")
+
+fill(p_ema1, p_ema3, color= use_ema1 and use_ema3 and not use_ema4 and bullish_alignment and show_ema_fill ? color.new(color.green, 85) : na, title="Bullish Zone (1-3)")
+fill(p_ema1, p_ema3, color= use_ema1 and use_ema3 and not use_ema4 and bearish_alignment and show_ema_fill ? color.new(color.red, 85) : na, title="Bearish Zone (1-3)")
+
+fill(p_ema1, p_ema2, color= use_ema1 and use_ema2 and not use_ema3 and not use_ema4 and bullish_alignment and show_ema_fill ? color.new(color.green, 85) : na, title="Bullish Zone (1-2)")
+fill(p_ema1, p_ema2, color= use_ema1 and use_ema2 and not use_ema3 and not use_ema4 and bearish_alignment and show_ema_fill ? color.new(color.red, 85) : na, title="Bearish Zone (1-2)")
+
+fill(p_ema2, p_ema4, color= use_ema2 and use_ema4 and not use_ema1 and bullish_alignment and show_ema_fill ? color.new(color.green, 85) : na, title="Bullish Zone (2-4)")
+fill(p_ema2, p_ema4, color= use_ema2 and use_ema4 and not use_ema1 and bearish_alignment and show_ema_fill ? color.new(color.red, 85) : na, title="Bearish Zone (2-4)")
+
+fill(p_ema2, p_ema3, color= use_ema2 and use_ema3 and not use_ema1 and not use_ema4 and bullish_alignment and show_ema_fill ? color.new(color.green, 85) : na, title="Bullish Zone (2-3)")
+fill(p_ema2, p_ema3, color= use_ema2 and use_ema3 and not use_ema1 and not use_ema4 and bearish_alignment and show_ema_fill ? color.new(color.red, 85) : na, title="Bearish Zone (2-3)")
+
+fill(p_ema3, p_ema4, color= use_ema3 and use_ema4 and not use_ema1 and not use_ema2 and bullish_alignment and show_ema_fill ? color.new(color.green, 85) : na, title="Bullish Zone (3-4)")
+fill(p_ema3, p_ema4, color= use_ema3 and use_ema4 and not use_ema1 and not use_ema2 and bearish_alignment and show_ema_fill ? color.new(color.red, 85) : na, title="Bearish Zone (3-4)")
+
+// LTF fill (EMA1 to EMA2) - only if both enabled
+fill(p_ema1, p_ema2, color= use_ema1 and use_ema2 and (ema1 > ema2) and show_ltf_fill ? color.new(color.green, 80) : na, title="LTF Bullish (1-2)")
+fill(p_ema1, p_ema2, color= use_ema1 and use_ema2 and (ema1 < ema2) and show_ltf_fill ? color.new(color.red, 80) : na, title="LTF Bearish (1-2)")
+
+// HTF fill (EMA3 to EMA4) - only if both enabled
+fill(p_ema3, p_ema4, color= use_ema3 and use_ema4 and (ema3 > ema4) and show_htf_fill ? color.new(color.blue, 85) : na, title="HTF Bullish (3-4)")
+fill(p_ema3, p_ema4, color= use_ema3 and use_ema4 and (ema3 < ema4) and show_htf_fill ? color.new(color.orange, 85) : na, title="HTF Bearish (3-4)")
+
+// Plot HTF Trend Filters
+plot(show_htf_filters and use_1h_filter ? h1_ma : na, "1H 100 MA", color=color.new(color.white, 0), linewidth=2, style=plot.style_line)
+plot(show_htf_filters and use_4h_filter ? h4_ema : na, "4H 200 EMA", color=color.new(color.silver, 0), linewidth=2, style=plot.style_line)
+
+// Plot ATR Bands (when ATR method selected)
+atr_upper = close + (atr_value * atr_multiplier)
+atr_lower = close - (atr_value * atr_multiplier)
+plot(show_atr_bands and stop_loss_method == "ATR" ? atr_upper : na, "ATR Upper", color=color.new(color.red, 50), linewidth=1, style=plot.style_circles)
+plot(show_atr_bands and stop_loss_method == "ATR" ? atr_lower : na, "ATR Lower", color=color.new(color.green, 50), linewidth=1, style=plot.style_circles)
+
+// Highlight alignment (background color - subtle)
+bgcolor(bullish_alignment ? color.new(color.green, 95) : bearish_alignment ? color.new(color.red, 95) : na)
+
+// Note: Cannot plot stops in loop due to Pine Script limitation
+// Trade boxes show stop levels instead
+
+// Entry signals (only show if not using trade boxes, since boxes have labels)
+plotshape(not show_trade_boxes and can_enter_long, "Long Entry", shape.labelup, location.belowbar, color=color.new(color.green, 0), text="LONG", textcolor=color.white, size=size.normal)
+plotshape(not show_trade_boxes and can_enter_short, "Short Entry", shape.labeldown, location.abovebar, color=color.new(color.red, 0), text="SHORT", textcolor=color.white, size=size.normal)
+
+// ========================================
+// PERFORMANCE STATISTICS PANEL
+// ========================================
+
+if show_performance_stats and barstate.islast
+    var table perf_table = table.new(position.bottom_left, 2, 12, bgcolor=color.new(color.black, 10), frame_color=color.new(color.orange, 50), frame_width=2, border_width=1)
+    
+    // Header
+    table.cell(perf_table, 0, 0, "📊 SIGNAL STATS", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.orange, 30))
+    table.cell(perf_table, 1, 0, "INDICATOR MODE", text_color=color.white, text_size=size.tiny, bgcolor=color.new(color.orange, 30))
+
+    // Signals
+    table.cell(perf_table, 0, 1, "Total Signals", text_color=color.white, text_size=size.small)
+    table.cell(perf_table, 1, 1, str.tostring(total_long_signals + total_short_signals), text_color=color.aqua, text_size=size.small)
+
+    table.cell(perf_table, 0, 2, "Long Signals", text_color=color.white, text_size=size.small)
+    table.cell(perf_table, 1, 2, str.tostring(total_long_signals), text_color=color.green, text_size=size.small)
+
+    table.cell(perf_table, 0, 3, "Short Signals", text_color=color.white, text_size=size.small)
+    table.cell(perf_table, 1, 3, str.tostring(total_short_signals), text_color=color.red, text_size=size.small)
+
+    table.cell(perf_table, 0, 4, "Signal Balance", text_color=color.white, text_size=size.small)
+    long_pct = total_long_signals + total_short_signals > 0 ? (total_long_signals / (total_long_signals + total_short_signals)) * 100 : 0
+    table.cell(perf_table, 1, 4, str.tostring(long_pct, "#.#") + "% Long", text_color=color.white, text_size=size.small)
+    
+    // Separator
+    table.cell(perf_table, 0, 5, "━━━━━━━━", text_color=color.gray, text_size=size.tiny)
+    table.cell(perf_table, 1, 5, "━━━━━━━━", text_color=color.gray, text_size=size.tiny)
+    
+    // Signal Streaks
+    table.cell(perf_table, 0, 6, "Max Long Streak", text_color=color.white, text_size=size.small)
+    table.cell(perf_table, 1, 6, str.tostring(max_consecutive_longs) + " signals", text_color=color.green, text_size=size.small)
+
+    table.cell(perf_table, 0, 7, "Max Short Streak", text_color=color.white, text_size=size.small)
+    table.cell(perf_table, 1, 7, str.tostring(max_consecutive_shorts) + " signals", text_color=color.red, text_size=size.small)
+
+    table.cell(perf_table, 0, 8, "Current Long Streak", text_color=color.white, text_size=size.small)
+    table.cell(perf_table, 1, 8, str.tostring(consecutive_long_signals), text_color=consecutive_long_signals > 0 ? color.green : color.gray, text_size=size.small)
+
+    table.cell(perf_table, 0, 9, "Current Short Streak", text_color=color.white, text_size=size.small)
+    table.cell(perf_table, 1, 9, str.tostring(consecutive_short_signals), text_color=consecutive_short_signals > 0 ? color.red : color.gray, text_size=size.small)
+    
+    // Separator
+    table.cell(perf_table, 0, 10, "━━━━━━━━", text_color=color.gray, text_size=size.tiny)
+    table.cell(perf_table, 1, 10, "━━━━━━━━", text_color=color.gray, text_size=size.tiny)
+    
+    table.cell(perf_table, 0, 11, "Mode", text_color=color.white, text_size=size.tiny)
+    table.cell(perf_table, 1, 11, profit_mode, text_color=color.aqua, text_size=size.tiny)
+
+// ========================================
+// INFO PANEL
+// ========================================
+
+if show_info_panel and barstate.islast
+    var table info = table.new(position.top_right, 2, 35, bgcolor=color.new(color.black, 10), frame_color=color.gray, frame_width=2, border_width=1)
+    
+    // Header
+    table.cell(info, 0, 0, "MTF EMA TREND", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.blue, 30))
+    table.cell(info, 1, 0, "STATUS", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.blue, 30))
+    
+    // Trend Status
+    table.cell(info, 0, 1, "Trend", text_color=color.white, text_size=size.small)
+    trend_status = bullish_trend ? "BULLISH ↑" : bearish_trend ? "BEARISH ↓" : "NEUTRAL ─"
+    trend_color = bullish_trend ? color.green : bearish_trend ? color.red : color.gray
+    table.cell(info, 1, 1, trend_status, text_color=trend_color, text_size=size.small)
+    
+    // EMA Values (only show enabled EMAs)
+    table.cell(info, 0, 2, "EMAs", text_color=color.gray, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+    table.cell(info, 1, 2, "Values", text_color=color.gray, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+    
+    int ema_row = 3
+    
+    if use_ema1
+        table.cell(info, 0, ema_row, "EMA " + str.tostring(ema1_length), text_color=color.white, text_size=size.tiny)
+        table.cell(info, 1, ema_row, "$" + str.tostring(ema1, "#.##"), text_color=color.yellow, text_size=size.tiny)
+        ema_row := ema_row + 1
+    
+    if use_ema2
+        table.cell(info, 0, ema_row, "EMA " + str.tostring(ema2_length), text_color=color.white, text_size=size.tiny)
+        table.cell(info, 1, ema_row, "$" + str.tostring(ema2, "#.##"), text_color=color.orange, text_size=size.tiny)
+        ema_row := ema_row + 1
+    
+    if use_ema3
+        table.cell(info, 0, ema_row, "EMA " + str.tostring(ema3_length), text_color=color.white, text_size=size.tiny)
+        table.cell(info, 1, ema_row, "$" + str.tostring(ema3, "#.##"), text_color=color.blue, text_size=size.tiny)
+        ema_row := ema_row + 1
+    
+    if use_ema4
+        table.cell(info, 0, ema_row, "EMA " + str.tostring(ema4_length), text_color=color.white, text_size=size.tiny)
+        table.cell(info, 1, ema_row, "$" + str.tostring(ema4, "#.##"), text_color=color.purple, text_size=size.tiny)
+        ema_row := ema_row + 1
+    
+    // Position Info (start after EMA rows)
+    int pos_row = ema_row
+    table.cell(info, 0, pos_row, "Position", text_color=color.gray, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+    table.cell(info, 1, pos_row, "Info", text_color=color.gray, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+    pos_row := pos_row + 1
+    
+    table.cell(info, 0, pos_row, "Mode", text_color=color.white, text_size=size.small)
+    mode_text = profit_mode + (profit_mode == "Advanced" ? " (Stage " + str.tostring(current_simulated_stage) + ")" : "")
+    table.cell(info, 1, pos_row, mode_text, text_color=color.aqua, text_size=size.small)
+    pos_row := pos_row + 1
+    
+    table.cell(info, 0, pos_row, "Size", text_color=color.white, text_size=size.small)
+    position_indicator = simulated_long_position ? "LONG" : simulated_short_position ? "SHORT" : "─"
+    table.cell(info, 1, pos_row, position_indicator, text_color=color.white, text_size=size.small)
+    pos_row := pos_row + 1
+    
+    table.cell(info, 0, pos_row, "Entry", text_color=color.white, text_size=size.small)
+    entry_text = (simulated_long_position or simulated_short_position) ? "$" + str.tostring(simulated_entry_price, "#.##") : "─"
+    table.cell(info, 1, pos_row, entry_text, text_color=color.white, text_size=size.small)
+    pos_row := pos_row + 1
+    
+    table.cell(info, 0, pos_row, "Current P&L", text_color=color.white, text_size=size.small)
+    pnl = simulated_profit()
+    pnl_text = (simulated_long_position or simulated_short_position) ? (pnl >= 0 ? "+$" : "-$") + str.tostring(math.abs(pnl), "#.##") : "─"
+    pnl_color = pnl >= 0 ? color.green : color.red
+    table.cell(info, 1, pos_row, pnl_text, text_color=pnl_color, text_size=size.small)
+    pos_row := pos_row + 1
+    
+    // Current margin usage (simulated)
+    table.cell(info, 0, pos_row, "Margin Used", text_color=color.white, text_size=size.tiny)
+    position_notional = (simulated_long_position or simulated_short_position) ? math.abs(simulated_position_size * simulated_entry_price) : 0
+    max_notional_display = account_size * leverage
+    margin_pct = max_notional_display > 0 ? (position_notional / max_notional_display * 100) : 0
+    margin_color = margin_pct > 80 ? color.red : margin_pct > 60 ? color.orange : color.green
+    table.cell(info, 1, pos_row, str.tostring(margin_pct, "#.#") + "%", text_color=margin_color, text_size=size.tiny)
+    pos_row := pos_row + 1
+    
+    // Current Signal Streaks
+    if consecutive_long_signals > 0 or consecutive_short_signals > 0
+        table.cell(info, 0, pos_row, "Signal Streaks", text_color=color.white, text_size=size.tiny)
+        streak_display = "L:" + str.tostring(consecutive_long_signals) + " S:" + str.tostring(consecutive_short_signals)
+        table.cell(info, 1, pos_row, streak_display, text_color=color.lime, text_size=size.tiny)
+        pos_row := pos_row + 1
+    
+    // HTF Filters
+    if use_1h_filter or use_4h_filter
+        table.cell(info, 0, pos_row, "HTF Filters", text_color=color.gray, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+        table.cell(info, 1, pos_row, "Status", text_color=color.gray, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+        pos_row := pos_row + 1
+        
+        if use_1h_filter
+            table.cell(info, 0, pos_row, "1H Filter", text_color=color.white, text_size=size.tiny)
+            h1_status = htf_filter_long ? "LONG ✓" : htf_filter_short ? "SHORT ✓" : "NEUTRAL"
+            h1_color = htf_filter_long ? color.green : htf_filter_short ? color.red : color.gray
+            table.cell(info, 1, pos_row, h1_status, text_color=h1_color, text_size=size.tiny)
+            pos_row := pos_row + 1
+        
+        if use_4h_filter
+            table.cell(info, 0, pos_row, "4H Filter", text_color=color.white, text_size=size.tiny)
+            h4_status = htf_filter_long ? "LONG ✓" : htf_filter_short ? "SHORT ✓" : "NEUTRAL"
+            h4_color = htf_filter_long ? color.green : htf_filter_short ? color.red : color.gray
+            table.cell(info, 1, pos_row, h4_status, text_color=h4_color, text_size=size.tiny)
+            pos_row := pos_row + 1
+        
+        // HTF Cooldown status
+        if use_htf_cooldown
+            table.cell(info, 0, pos_row, "HTF Cooldown", text_color=color.white, text_size=size.tiny)
+            cooldown_status = htf_cooldown_ok ? "READY ✓" : "WAIT ⏳"
+            cooldown_color = htf_cooldown_ok ? color.green : color.orange
+            table.cell(info, 1, pos_row, cooldown_status, text_color=cooldown_color, text_size=size.tiny)
+            pos_row := pos_row + 1
+            
+            // Show time remaining if in cooldown
+            if not htf_cooldown_ok
+                // Calculate hours remaining for the most restrictive cooldown
+                bars_remaining_h1 = use_1h_filter ? math.max(0, htf_cooldown_bars - bars_since_h1_interaction) : 0
+                bars_remaining_h4 = use_4h_filter ? math.max(0, htf_cooldown_bars - bars_since_h4_interaction) : 0
+                bars_remaining = math.max(bars_remaining_h1, bars_remaining_h4)
+                hours_remaining = bars_remaining * bars_per_hour_htf
+                
+                table.cell(info, 0, pos_row, "Time Left", text_color=color.white, text_size=size.tiny)
+                table.cell(info, 1, pos_row, str.tostring(hours_remaining, "#.#") + "h", text_color=color.orange, text_size=size.tiny)
+                pos_row := pos_row + 1
+    
+    // Risk Info
+    int risk_row = pos_row
+    table.cell(info, 0, risk_row, "Risk", text_color=color.gray, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+    table.cell(info, 1, risk_row, "Management", text_color=color.gray, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+    
+    risk_offset = risk_row + 1
+    table.cell(info, 0, risk_offset, "Entry EMA", text_color=color.white, text_size=size.tiny)
+    table.cell(info, 1, risk_offset, entry_ema_choice, text_color=color.yellow, text_size=size.tiny)
+    
+    table.cell(info, 0, risk_offset + 1, "Cross Method", text_color=color.white, text_size=size.tiny)
+    table.cell(info, 1, risk_offset + 1, cross_detection_method, text_color=color.aqua, text_size=size.tiny)
+    
+    table.cell(info, 0, risk_offset + 2, "Stop Method", text_color=color.white, text_size=size.tiny)
+    stop_method_display = stop_loss_method == "EMA" ? stop_loss_method + " (" + stop_ema_choice + ")" : stop_loss_method
+    table.cell(info, 1, risk_offset + 2, stop_method_display, text_color=color.aqua, text_size=size.tiny)
+    
+    risk_offset := risk_offset + 2
+    
+    // Show ATR value if using ATR method
+    if stop_loss_method == "ATR"
+        table.cell(info, 0, risk_offset + 1, "ATR Value", text_color=color.white, text_size=size.tiny)
+        table.cell(info, 1, risk_offset + 1, "$" + str.tostring(atr_value, "#.##") + " (×" + str.tostring(atr_multiplier, "#.#") + ")", text_color=color.orange, text_size=size.tiny)
+        risk_offset := risk_offset + 1
+    
+    table.cell(info, 0, risk_offset + 1, "Target Risk", text_color=color.white, text_size=size.small)
+    current_risk_display = get_current_risk()
+    table.cell(info, 1, risk_offset + 1, "$" + str.tostring(current_risk_display, "#"), text_color=color.yellow, text_size=size.small)
+    
+    // Show risk multiplier if scaling enabled
+    if use_risk_scaling
+        table.cell(info, 0, risk_offset + 2, "Risk Multiplier", text_color=color.white, text_size=size.tiny)
+        multiplier_color = current_risk_multiplier > 1.0 ? color.lime : color.white
+        table.cell(info, 1, risk_offset + 2, str.tostring(current_risk_multiplier, "#.##") + "x", text_color=multiplier_color, text_size=size.tiny)
+        risk_offset := risk_offset + 1
+    
+    // Show dynamic equity if enabled
+    if use_dynamic_equity and use_risk_scaling
+        table.cell(info, 0, risk_offset + 2, "Current Equity", text_color=color.white, text_size=size.tiny)
+        equity_color = current_simulated_equity > account_size ? color.green : current_simulated_equity < account_size ? color.red : color.white
+        table.cell(info, 1, risk_offset + 2, "$" + str.tostring(current_simulated_equity, "#"), text_color=equity_color, text_size=size.tiny)
+        risk_offset := risk_offset + 1
+    
+    table.cell(info, 0, risk_offset + 2, "Max Position", text_color=color.white, text_size=size.tiny)
+    table.cell(info, 1, risk_offset + 2, str.tostring(max_position_pct, "#") + "% of margin", text_color=color.orange, text_size=size.tiny)
+    
+    table.cell(info, 0, risk_offset + 3, "Max Notional", text_color=color.white, text_size=size.tiny)
+    max_notional_info = account_size * leverage
+    table.cell(info, 1, risk_offset + 3, "$" + str.tostring(max_notional_info, "#"), text_color=color.white, text_size=size.tiny)
+    
+    table.cell(info, 0, risk_offset + 4, "Leverage", text_color=color.white, text_size=size.tiny)
+    table.cell(info, 1, risk_offset + 4, str.tostring(leverage, "#.#") + "x", text_color=color.white, text_size=size.tiny)
+    
+
+// ========================================
+// INDICATORS PANEL
+// ========================================
+
+if show_indicators_panel and barstate.islast
+    var table ind_table = table.new(position.middle_right, 2, 33, bgcolor=color.new(color.black, 10), frame_color=color.new(color.blue, 50), frame_width=2, border_width=1)
+    
+    // Header
+    table.cell(ind_table, 0, 0, "📈 FILTERS", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.blue, 30))
+    table.cell(ind_table, 1, 0, "STATUS", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.blue, 30))
+    
+    // Dynamic row counter - only shows sections for enabled filters
+    int row = 1
+    
+    // CVD Section (only if enabled)
+    if use_cvd_filter
+        table.cell(ind_table, 0, row, "CVD", text_color=color.gray, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+        table.cell(ind_table, 1, row, "ENABLED", text_color=color.green, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+        row := row + 1
+        
+        table.cell(ind_table, 0, row, "Value", text_color=color.white, text_size=size.small)
+        cvd_color = cvd > 0 ? color.green : cvd < 0 ? color.red : color.gray
+        table.cell(ind_table, 1, row, str.tostring(cvd, "#,###"), text_color=cvd_color, text_size=size.small)
+        row := row + 1
+        
+        table.cell(ind_table, 0, row, "Trend", text_color=color.white, text_size=size.tiny)
+        cvd_trend = cvd_rising ? "RISING ↑" : cvd_falling ? "FALLING ↓" : "FLAT ─"
+        cvd_trend_color = cvd_rising ? color.green : cvd_falling ? color.red : color.gray
+        table.cell(ind_table, 1, row, cvd_trend, text_color=cvd_trend_color, text_size=size.tiny)
+        row := row + 1
+        
+        // Separator
+        table.cell(ind_table, 0, row, "━━━━━━━━", text_color=color.gray, text_size=size.tiny)
+        table.cell(ind_table, 1, row, "━━━━━━━━", text_color=color.gray, text_size=size.tiny)
+        row := row + 1
+    
+    // RSI Section (only if enabled)
+    if use_rsi_filter
+        table.cell(ind_table, 0, row, "RSI(" + str.tostring(rsi_length) + ")", text_color=color.gray, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+        table.cell(ind_table, 1, row, "ENABLED", text_color=color.green, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+        row := row + 1
+        
+        table.cell(ind_table, 0, row, "Value", text_color=color.white, text_size=size.small)
+        rsi_color = rsi_value >= 70 ? color.red : rsi_value <= 30 ? color.green : rsi_value >= 50 ? color.orange : color.aqua
+        table.cell(ind_table, 1, row, str.tostring(rsi_value, "#.##"), text_color=rsi_color, text_size=size.small)
+        row := row + 1
+        
+        table.cell(ind_table, 0, row, "Zone", text_color=color.white, text_size=size.tiny)
+        rsi_zone = rsi_value >= 70 ? "OVERBOUGHT" : rsi_value <= 30 ? "OVERSOLD" : "NEUTRAL"
+        table.cell(ind_table, 1, row, rsi_zone, text_color=rsi_color, text_size=size.tiny)
+        row := row + 1
+        
+        // Separator
+        table.cell(ind_table, 0, row, "━━━━━━━━", text_color=color.gray, text_size=size.tiny)
+        table.cell(ind_table, 1, row, "━━━━━━━━", text_color=color.gray, text_size=size.tiny)
+        row := row + 1
+    
+    // MACD Section (only if enabled)
+    if use_macd_filter
+        table.cell(ind_table, 0, row, "MACD", text_color=color.gray, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+        table.cell(ind_table, 1, row, "ENABLED", text_color=color.green, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+        row := row + 1
+        
+        table.cell(ind_table, 0, row, "Histogram", text_color=color.white, text_size=size.small)
+        macd_hist_color = macd_hist > 0 ? color.green : macd_hist < 0 ? color.red : color.gray
+        table.cell(ind_table, 1, row, str.tostring(macd_hist, "#.####"), text_color=macd_hist_color, text_size=size.small)
+        row := row + 1
+        
+        table.cell(ind_table, 0, row, "Signal", text_color=color.white, text_size=size.tiny)
+        macd_signal_text = macd_above_signal ? "BULLISH ↑" : "BEARISH ↓"
+        macd_signal_color = macd_above_signal ? color.green : color.red
+        table.cell(ind_table, 1, row, macd_signal_text, text_color=macd_signal_color, text_size=size.tiny)
+        row := row + 1
+        
+        // Separator
+        table.cell(ind_table, 0, row, "━━━━━━━━", text_color=color.gray, text_size=size.tiny)
+        table.cell(ind_table, 1, row, "━━━━━━━━", text_color=color.gray, text_size=size.tiny)
+        row := row + 1
+    
+    // Orderflow Section (only if enabled)
+    if use_orderflow_filter
+        table.cell(ind_table, 0, row, "ORDERFLOW " + of_timeframe, text_color=color.gray, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+        table.cell(ind_table, 1, row, "ENABLED", text_color=color.green, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+        row := row + 1
+        
+        table.cell(ind_table, 0, row, "Bullish %", text_color=color.white, text_size=size.small)
+        of_bull_color = of_bullish_pct >= of_bullish_threshold ? color.green : color.gray
+        table.cell(ind_table, 1, row, str.tostring(of_bullish_pct, "#.#") + "%", text_color=of_bull_color, text_size=size.small)
+        row := row + 1
+        
+        table.cell(ind_table, 0, row, "Bearish %", text_color=color.white, text_size=size.small)
+        of_bear_color = of_bearish_pct >= of_bearish_threshold ? color.red : color.gray
+        table.cell(ind_table, 1, row, str.tostring(of_bearish_pct, "#.#") + "%", text_color=of_bear_color, text_size=size.small)
+        row := row + 1
+        
+        table.cell(ind_table, 0, row, "Bar Strength", text_color=color.white, text_size=size.tiny)
+        of_strength_text = of_strong_bullish ? "STRONG ↑" : of_strong_bearish ? "STRONG ↓" : "WEAK"
+        of_strength_color = of_strong_bullish ? color.green : of_strong_bearish ? color.red : color.gray
+        table.cell(ind_table, 1, row, of_strength_text, text_color=of_strength_color, text_size=size.tiny)
+        row := row + 1
+        
+        table.cell(ind_table, 0, row, "Volume", text_color=color.white, text_size=size.tiny)
+        of_vol_text = of_volume_increasing ? "STRONG ✓" : "WEAK ✗"
+        of_vol_color = of_volume_increasing ? color.green : color.orange
+        table.cell(ind_table, 1, row, of_vol_text, text_color=of_vol_color, text_size=size.tiny)
+        row := row + 1
+        
+        // Separator
+        table.cell(ind_table, 0, row, "━━━━━━━━", text_color=color.gray, text_size=size.tiny)
+        table.cell(ind_table, 1, row, "━━━━━━━━", text_color=color.gray, text_size=size.tiny)
+        row := row + 1
+    
+    // Volatility Section (only if enabled)
+    if use_volatility_filter
+        table.cell(ind_table, 0, row, "VOLATILITY " + vol_timeframe, text_color=color.gray, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+        table.cell(ind_table, 1, row, "ENABLED", text_color=color.green, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+        row := row + 1
+        
+        table.cell(ind_table, 0, row, "ATR", text_color=color.white, text_size=size.small)
+        table.cell(ind_table, 1, row, "$" + str.tostring(vol_htf_atr, "#.##"), text_color=color.white, text_size=size.small)
+        row := row + 1
+        
+        table.cell(ind_table, 0, row, "Percentile", text_color=color.white, text_size=size.small)
+        vol_percentile_color = vol_in_range ? color.green : color.red
+        table.cell(ind_table, 1, row, str.tostring(vol_current_rank, "#.#") + "%ile", text_color=vol_percentile_color, text_size=size.small)
+        row := row + 1
+        
+        table.cell(ind_table, 0, row, "Regime", text_color=color.white, text_size=size.tiny)
+        vol_regime_text = vol_current_rank < vol_min_percentile ? "TOO LOW" : vol_current_rank > vol_max_percentile ? "TOO HIGH" : "OPTIMAL"
+        vol_regime_color = vol_regime_text == "OPTIMAL" ? color.green : color.orange
+        table.cell(ind_table, 1, row, vol_regime_text, text_color=vol_regime_color, text_size=size.tiny)
+        row := row + 1
+        
+        table.cell(ind_table, 0, row, "Expansion", text_color=color.white, text_size=size.tiny)
+        vol_exp_text = vol_is_expanding ? "EXPANDING ✓" : "CONTRACTING ✗"
+        vol_exp_color = vol_is_expanding ? color.green : color.orange
+        table.cell(ind_table, 1, row, vol_exp_text, text_color=vol_exp_color, text_size=size.tiny)
+        row := row + 1
+        
+        // Separator
+        table.cell(ind_table, 0, row, "━━━━━━━━", text_color=color.gray, text_size=size.tiny)
+        table.cell(ind_table, 1, row, "━━━━━━━━", text_color=color.gray, text_size=size.tiny)
+        row := row + 1
+    
+    // Trend Duration Section (only if enabled)
+    if use_trend_time_filter
+        table.cell(ind_table, 0, row, "TREND DURATION", text_color=color.gray, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+        table.cell(ind_table, 1, row, "ENABLED", text_color=color.green, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+        row := row + 1
+        
+        // Show current trend duration in bars and time (based on EMA1-2-3 alignment)
+        current_trend_bars = bullish_alignment_123 ? bullish_trend_bars : bearish_alignment_123 ? bearish_trend_bars : 0
+        bars_per_hour = get_bars_per_hour()
+        trend_hours = current_trend_bars / bars_per_hour
+        
+        table.cell(ind_table, 0, row, "Current (EMA1-3)", text_color=color.white, text_size=size.small)
+        trend_duration_text = str.tostring(current_trend_bars) + " bars (" + str.tostring(trend_hours, "#.#") + "h)"
+        trend_duration_color = current_trend_bars >= trend_min_bars_required ? color.green : color.orange
+        table.cell(ind_table, 1, row, trend_duration_text, text_color=trend_duration_color, text_size=size.small)
+        row := row + 1
+        
+        table.cell(ind_table, 0, row, "Required", text_color=color.white, text_size=size.tiny)
+        required_text = trend_time_method == "Hours" ? str.tostring(trend_min_hours, "#.#") + "h" : str.tostring(trend_min_bars) + " bars"
+        table.cell(ind_table, 1, row, required_text, text_color=color.aqua, text_size=size.tiny)
+        row := row + 1
+        
+        // Separator
+        table.cell(ind_table, 0, row, "━━━━━━━━", text_color=color.gray, text_size=size.tiny)
+        table.cell(ind_table, 1, row, "━━━━━━━━", text_color=color.gray, text_size=size.tiny)
+        row := row + 1
+    
+    // Post-Trade Cooldown Section (only if enabled)
+    if use_post_trade_cooldown
+        table.cell(ind_table, 0, row, "POST-TRADE COOLDOWN", text_color=color.gray, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+        table.cell(ind_table, 1, row, "ENABLED", text_color=color.green, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+        row := row + 1
+        
+        table.cell(ind_table, 0, row, "Status", text_color=color.white, text_size=size.small)
+        pt_status_text = post_trade_cooldown_ok ? "READY ✓" : "COOLING ⏳"
+        pt_status_color = post_trade_cooldown_ok ? color.green : color.orange
+        table.cell(ind_table, 1, row, pt_status_text, text_color=pt_status_color, text_size=size.small)
+        row := row + 1
+        
+        table.cell(ind_table, 0, row, "Time Left", text_color=color.white, text_size=size.tiny)
+        if not post_trade_cooldown_ok
+            bars_left = post_trade_cooldown_bars - bars_since_trade_close
+            hours_remaining_pt = bars_left / get_bars_per_hour()
+            table.cell(ind_table, 1, row, str.tostring(hours_remaining_pt, "#.#") + "h (" + str.tostring(bars_left) + " bars)", text_color=color.orange, text_size=size.tiny)
+        else
+            table.cell(ind_table, 1, row, "─", text_color=color.gray, text_size=size.tiny)
+        row := row + 1
+        
+        // Separator
+        table.cell(ind_table, 0, row, "━━━━━━━━", text_color=color.gray, text_size=size.tiny)
+        table.cell(ind_table, 1, row, "━━━━━━━━", text_color=color.gray, text_size=size.tiny)
+        row := row + 1
+    
+    // Summary (always show if any filter is enabled)
+    if use_cvd_filter or use_rsi_filter or use_macd_filter or use_orderflow_filter or use_volatility_filter or use_trend_time_filter or use_post_trade_cooldown
+        table.cell(ind_table, 0, row, "OVERALL", text_color=color.white, text_size=size.small)
+        overall_text = additional_filters_long ? "LONG ✓" : additional_filters_short ? "SHORT ✓" : "WAIT ✗"
+        overall_color = additional_filters_long ? color.green : additional_filters_short ? color.red : color.gray
+        table.cell(ind_table, 1, row, overall_text, text_color=overall_color, text_size=size.small)
+
+// ========================================
+// ALERTS
+// ========================================
+
+alertcondition(can_enter_long, "Long Signal", "New LONG signal - All conditions met (Indicator Mode)")
+alertcondition(can_enter_short, "Short Signal", "New SHORT signal - All conditions met (Indicator Mode)")
+

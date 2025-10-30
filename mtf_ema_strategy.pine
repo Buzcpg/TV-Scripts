@@ -1,0 +1,437 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+//
+// MTF EMA CROSS STRATEGY with QUALITY FILTERS
+// ============================================
+// This strategy enters trades when price crosses the HTF EMA50, targeting HTF EMA200
+// 
+// QUALITY FILTERS TO AVOID BAD TRADES:
+// - Risk:Reward Filter: Only takes trades with minimum 1:1 RR (configurable)
+// - Confirmation Candles: Waits for price to stay beyond EMA before entry (avoids wick traps)
+// - Minimum Distance: Price must close X% beyond EMA (avoids marginal crosses)
+// - Momentum Filter: Uses RSI to confirm directional strength
+// - Cooldown Period: Prevents revenge trading after stop losses
+//
+// These filters dramatically improve trade quality by filtering out whipsaws and low-probability setups
+
+//@version=5
+strategy("MTF EMA Cross Strategy", "MTF EMA", overlay=true, default_qty_type=strategy.cash, initial_capital=10000, commission_type=strategy.commission.percent, commission_value=0.07)
+
+// ========================================
+// INPUT SETTINGS
+// ========================================
+
+// Timeframe Settings
+grp_tf = "─── Timeframe Settings ───"
+higher_timeframe = input.timeframe("5", "Higher Timeframe (Signal)", group=grp_tf, tooltip="The timeframe where EMA crosses are detected. Entry chart should be 1 timeframe below this.")
+
+// EMA Settings
+grp_ema = "─── EMA Settings ───"
+ema_fast = input.int(50, "EMA Fast (Entry Signal)", minval=1, group=grp_ema)
+ema_slow = input.int(200, "EMA Slow (Target)", minval=1, group=grp_ema)
+
+// Stop Loss Settings
+grp_sl = "─── Stop Loss Settings ───"
+pivot_left = input.int(5, "Pivot Left Bars", minval=1, group=grp_sl)
+pivot_right = input.int(2, "Pivot Right Bars", minval=1, group=grp_sl)
+use_atr_buffer = input.bool(true, "Add ATR Buffer to Pivot", group=grp_sl, tooltip="Adds a small buffer beyond the pivot for safer stop placement")
+atr_buffer_mult = input.float(0.5, "ATR Buffer Multiplier", minval=0, step=0.1, group=grp_sl)
+atr_length = input.int(14, "ATR Length", minval=1, group=grp_sl)
+
+// Position Sizing Settings
+grp_size = "─── Position Sizing ───"
+risk_amount = input.float(50, "Risk Amount ($)", minval=0.01, group=grp_size, tooltip="Amount to risk per trade in dollars")
+include_fees = input.bool(true, "Include Fees in Risk", group=grp_size)
+fee_platform = input.string("Breakout", "Fee Platform", group=grp_size, options=["Breakout", "Edgex", "Blofin", "Bybit", "HyperLiquid"])
+entry_type = input.string("Market", "Entry Type", group=grp_size, options=["Limit", "Market"])
+
+// Strategy Settings
+grp_strategy = "─── Strategy Settings ───"
+trade_direction = input.string("Both", "Trade Direction", group=grp_strategy, options=["Long", "Short", "Both"])
+use_ema200_target = input.bool(true, "Exit at EMA 200", group=grp_strategy, tooltip="When enabled, exits when price reaches HTF EMA 200")
+min_rr_ratio = input.float(1.0, "Minimum Risk:Reward Ratio", minval=0.1, step=0.1, group=grp_strategy, tooltip="Minimum RR required to enter a trade. 1.0 means potential profit must be at least equal to risk.")
+allow_partial_profit = input.bool(false, "Take Partial at 2:1 RR", group=grp_strategy)
+partial_percent = input.float(50, "Partial Profit %", minval=1, maxval=100, step=1, group=grp_strategy)
+
+// Trade Quality Filters
+grp_filters = "─── Trade Quality Filters ───"
+use_confirmation = input.bool(true, "Require Confirmation Candles", group=grp_filters, tooltip="Wait for price to stay beyond EMA for X bars before entry")
+confirmation_bars = input.int(2, "Confirmation Bars", minval=1, maxval=5, group=grp_filters, tooltip="Number of bars that must close beyond EMA50")
+min_ema_distance = input.float(0.15, "Min Distance from EMA (%)", minval=0, step=0.05, group=grp_filters, tooltip="Price must close X% beyond EMA50 to avoid wicks. 0 = disabled")
+use_momentum_filter = input.bool(true, "Use Momentum Filter (RSI)", group=grp_filters, tooltip="Only enter if RSI shows momentum in trade direction")
+rsi_length = input.int(14, "RSI Length", minval=2, group=grp_filters)
+rsi_long_min = input.int(50, "RSI Min for Long", minval=30, maxval=70, group=grp_filters, tooltip="RSI must be above this for longs")
+rsi_short_max = input.int(50, "RSI Max for Short", minval=30, maxval=70, group=grp_filters, tooltip="RSI must be below this for shorts")
+use_cooldown = input.bool(true, "Use Trade Cooldown", group=grp_filters, tooltip="Prevents re-entering too quickly after stop loss")
+cooldown_bars = input.int(10, "Cooldown Period (bars)", minval=1, group=grp_filters, tooltip="Wait X bars after stop loss before next entry")
+
+// Visual Settings
+grp_visual = "─── Visual Settings ───"
+show_htf_emas = input.bool(true, "Show HTF EMAs", group=grp_visual)
+show_pivots = input.bool(true, "Show Pivot Points", group=grp_visual, tooltip="Only shows pivots actually used for trades")
+show_position_info = input.bool(true, "Show Position Info", group=grp_visual)
+show_debug = input.bool(false, "Show Debug Markers", group=grp_visual, tooltip="Shows all EMA crosses and pivot levels for debugging")
+
+// ========================================
+// CALCULATIONS
+// ========================================
+
+// Higher Timeframe EMA calculations
+htf_ema50 = request.security(syminfo.tickerid, higher_timeframe, ta.ema(close, ema_fast), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+htf_ema200 = request.security(syminfo.tickerid, higher_timeframe, ta.ema(close, ema_slow), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+// Detect crosses: CURRENT timeframe CLOSE crossing HTF EMAs
+// Must be a close above/below, not just a wick
+// Using close[1] and close to ensure it's based on closed candles
+bullish_cross = close[1] < htf_ema50[1] and close > htf_ema50
+bearish_cross = close[1] > htf_ema50[1] and close < htf_ema50
+
+// Direction filters: only trade towards EMA200
+// Long when EMA50 is below EMA200 (room to move up to target)
+// Short when EMA50 is above EMA200 (room to move down to target)
+ema50_below_200 = htf_ema50 < htf_ema200
+ema50_above_200 = htf_ema50 > htf_ema200
+
+// ========================================
+// TRADE QUALITY FILTERS
+// ========================================
+
+// 1. CONFIRMATION BARS - Count consecutive bars above/below EMA
+var int bars_above_ema = 0
+var int bars_below_ema = 0
+
+if close > htf_ema50
+    bars_above_ema := bars_above_ema + 1
+    bars_below_ema := 0
+else if close < htf_ema50
+    bars_below_ema := bars_below_ema + 1
+    bars_above_ema := 0
+else
+    bars_above_ema := 0
+    bars_below_ema := 0
+
+confirmation_long = use_confirmation ? bars_above_ema >= confirmation_bars : true
+confirmation_short = use_confirmation ? bars_below_ema >= confirmation_bars : true
+
+// 2. MINIMUM DISTANCE FROM EMA - Avoid marginal crosses
+distance_from_ema_pct = math.abs((close - htf_ema50) / htf_ema50 * 100)
+min_distance_met = min_ema_distance > 0 ? distance_from_ema_pct >= min_ema_distance : true
+
+// 3. MOMENTUM FILTER - RSI
+rsi = ta.rsi(close, rsi_length)
+momentum_long = use_momentum_filter ? rsi >= rsi_long_min : true
+momentum_short = use_momentum_filter ? rsi <= rsi_short_max : true
+
+// 4. COOLDOWN PERIOD - Track bars since last stop loss
+var int bars_since_stop = 999
+var bool just_stopped = false
+
+// Track when we get stopped out
+if strategy.position_size[1] != 0 and strategy.position_size == 0 and strategy.closedtrades > strategy.closedtrades[1]
+    // Check if it was a loss (stopped out)
+    last_trade_profit = strategy.closedtrades.profit(strategy.closedtrades - 1)
+    if last_trade_profit < 0
+        bars_since_stop := 0
+        just_stopped := true
+
+if just_stopped or bars_since_stop < 999
+    bars_since_stop := bars_since_stop + 1
+    just_stopped := false
+
+cooldown_ok = use_cooldown ? bars_since_stop >= cooldown_bars : true
+
+// Pivot High/Low for Stop Loss
+pivot_high = ta.pivothigh(high, pivot_left, pivot_right)
+pivot_low = ta.pivotlow(low, pivot_left, pivot_right)
+
+// Track last pivot points
+var float last_pivot_high = na
+var float last_pivot_low = na
+
+if not na(pivot_high)
+    last_pivot_high := pivot_high
+if not na(pivot_low)
+    last_pivot_low := pivot_low
+
+// ATR for buffer
+atr = ta.atr(atr_length)
+atr_buffer = atr * atr_buffer_mult
+
+// Calculate stop levels with optional buffer
+long_stop = use_atr_buffer ? last_pivot_low - atr_buffer : last_pivot_low
+short_stop = use_atr_buffer ? last_pivot_high + atr_buffer : last_pivot_high
+
+// Fee calculations
+var float maker_fee = 0.0
+var float taker_fee = 0.0
+
+if fee_platform == "Breakout"
+    maker_fee := 0.035
+    taker_fee := 0.035
+else if fee_platform == "Edgex"
+    maker_fee := 0.015
+    taker_fee := 0.038
+else if fee_platform == "Blofin"
+    maker_fee := 0.0200
+    taker_fee := 0.0600
+else if fee_platform == "Bybit"
+    maker_fee := 0.0200
+    taker_fee := 0.0550
+else if fee_platform == "HyperLiquid"
+    maker_fee := 0.0150
+    taker_fee := 0.0450
+
+entry_fee_rate = entry_type == "Limit" ? maker_fee/100 : taker_fee/100
+exit_fee_rate = taker_fee/100
+total_fee_rate = entry_fee_rate + exit_fee_rate
+
+// ========================================
+// POSITION SIZING FUNCTION
+// ========================================
+
+calc_position_size(entry, stop) =>
+    risk_per_contract = math.abs(entry - stop)
+    var float qty = 0.0
+    
+    if include_fees
+        effective_risk = risk_per_contract + (entry * total_fee_rate)
+        qty := risk_amount / effective_risk
+    else
+        qty := risk_amount / risk_per_contract
+    
+    qty
+
+// ========================================
+// STRATEGY LOGIC
+// ========================================
+
+// Calculate Risk:Reward Ratios
+// For Long: Risk = Entry - Stop, Reward = Target - Entry
+long_risk = close - long_stop
+long_reward = htf_ema200 - close
+long_rr = long_risk > 0 ? (long_reward / long_risk) : 0
+
+// For Short: Risk = Stop - Entry, Reward = Entry - Target
+short_risk = short_stop - close
+short_reward = close - htf_ema200
+short_rr = short_risk > 0 ? (short_reward / short_risk) : 0
+
+// Entry conditions with ALL quality filters
+// Long: price crossed above EMA50, EMA50 is below EMA200, valid stop, good RR, AND passes quality filters
+long_condition = bullish_cross and ema50_below_200 and not na(last_pivot_low) and 
+                 long_rr >= min_rr_ratio and 
+                 confirmation_long and min_distance_met and momentum_long and cooldown_ok and 
+                 (trade_direction == "Long" or trade_direction == "Both") and 
+                 strategy.position_size == 0
+
+// Short: price crossed below EMA50, EMA50 is above EMA200, valid stop, good RR, AND passes quality filters
+short_condition = bearish_cross and ema50_above_200 and not na(last_pivot_high) and 
+                  short_rr >= min_rr_ratio and 
+                  confirmation_short and min_distance_met and momentum_short and cooldown_ok and 
+                  (trade_direction == "Short" or trade_direction == "Both") and 
+                  strategy.position_size == 0
+
+// Position sizing
+var float long_qty = na
+var float short_qty = na
+var float long_target = na
+var float short_target = na
+
+// Long Entry
+if long_condition and strategy.position_size == 0
+    long_qty := calc_position_size(close, long_stop)
+    long_target := htf_ema200
+    
+    // Calculate RR for partial profit (2:1)
+    risk_distance = close - long_stop
+    partial_target = close + (risk_distance * 2)
+    
+    strategy.entry("Long", strategy.long, qty=long_qty)
+    
+    // Set stop loss only, target will be handled separately
+    strategy.exit("Long Stop", "Long", stop=long_stop)
+    
+    if allow_partial_profit
+        partial_qty = long_qty * (partial_percent / 100)
+        strategy.exit("Long Partial", "Long", qty=partial_qty, limit=partial_target, stop=long_stop)
+
+// Short Entry
+if short_condition and strategy.position_size == 0
+    short_qty := calc_position_size(close, short_stop)
+    short_target := htf_ema200
+    
+    // Calculate RR for partial profit (2:1)
+    risk_distance = short_stop - close
+    partial_target = close - (risk_distance * 2)
+    
+    strategy.entry("Short", strategy.short, qty=short_qty)
+    
+    // Set stop loss only, target will be handled separately
+    strategy.exit("Short Stop", "Short", stop=short_stop)
+    
+    if allow_partial_profit
+        partial_qty = short_qty * (partial_percent / 100)
+        strategy.exit("Short Partial", "Short", qty=partial_qty, limit=partial_target, stop=short_stop)
+
+// Exit at EMA 200 if enabled
+// For LONG: exit when price reaches or crosses above EMA200
+// For SHORT: exit when price reaches or crosses below EMA200
+long_hit_target = ta.crossover(close, htf_ema200) or (close >= htf_ema200 and close[1] < htf_ema200)
+short_hit_target = ta.crossunder(close, htf_ema200) or (close <= htf_ema200 and close[1] > htf_ema200)
+
+if use_ema200_target
+    // Long: Close when we reach/cross EMA200 from below
+    if strategy.position_size > 0 and long_hit_target
+        strategy.close("Long", comment="TP: EMA200")
+    
+    // Short: Close when we reach/cross EMA200 from above  
+    if strategy.position_size < 0 and short_hit_target
+        strategy.close("Short", comment="TP: EMA200")
+
+// ========================================
+// VISUALS
+// ========================================
+
+// Plot HTF EMAs with dynamic coloring based on relationship
+ema50_color = ema50_below_200 ? color.new(color.lime, 0) : ema50_above_200 ? color.new(color.red, 0) : color.new(color.orange, 0)
+plot(show_htf_emas ? htf_ema50 : na, "HTF EMA 50", color=ema50_color, linewidth=2)
+plot(show_htf_emas ? htf_ema200 : na, "HTF EMA 200", color=color.new(color.blue, 0), linewidth=2)
+
+// Track which pivots are used for actual trades
+var float used_pivot_low = na
+var float used_pivot_high = na
+var int used_pivot_low_bar = na
+var int used_pivot_high_bar = na
+
+// Mark pivots when they're used for trades
+if long_condition
+    used_pivot_low := last_pivot_low
+    used_pivot_low_bar := bar_index
+    
+if short_condition
+    used_pivot_high := last_pivot_high
+    used_pivot_high_bar := bar_index
+
+// Only plot pivots that were actually used for trades
+plotshape(show_pivots and bar_index == used_pivot_low_bar, "Used Pivot Low", shape.triangleup, location.belowbar, color.new(color.lime, 0), size=size.normal, text="SL")
+plotshape(show_pivots and bar_index == used_pivot_high_bar, "Used Pivot High", shape.triangledown, location.abovebar, color.new(color.red, 0), size=size.normal, text="SL")
+
+// Plot Entry Signals
+plotshape(long_condition, "Long Signal", shape.labelup, location.belowbar, color.new(color.green, 0), text="LONG", textcolor=color.white, size=size.normal)
+plotshape(short_condition, "Short Signal", shape.labeldown, location.abovebar, color.new(color.red, 0), text="SHORT", textcolor=color.white, size=size.normal)
+
+// Debug: Plot crosses even without valid pivots (optional - can disable in settings)
+plotchar(show_debug and bullish_cross, "Bull Cross", "▲", location.belowbar, color.new(color.aqua, 0), size=size.tiny)
+plotchar(show_debug and bearish_cross, "Bear Cross", "▼", location.abovebar, color.new(color.fuchsia, 0), size=size.tiny)
+
+// Debug: Show when we have valid pivots (only if debug enabled)
+plot(show_debug ? last_pivot_low : na, "Last Pivot Low", color.new(color.green, 70), linewidth=1, style=plot.style_circles)
+plot(show_debug ? last_pivot_high : na, "Last Pivot High", color.new(color.red, 70), linewidth=1, style=plot.style_circles)
+
+// Debug: Show rejected trades with reasons
+// Poor RR
+rejected_long_rr = show_debug and bullish_cross and ema50_below_200 and not na(last_pivot_low) and long_rr < min_rr_ratio and strategy.position_size == 0
+rejected_short_rr = show_debug and bearish_cross and ema50_above_200 and not na(last_pivot_high) and short_rr < min_rr_ratio and strategy.position_size == 0
+plotchar(rejected_long_rr, "Rejected Long (Poor RR)", "✗", location.belowbar, color.new(color.orange, 0), size=size.tiny, text="RR")
+plotchar(rejected_short_rr, "Rejected Short (Poor RR)", "✗", location.abovebar, color.new(color.orange, 0), size=size.tiny, text="RR")
+
+// Lack of confirmation
+rejected_long_conf = show_debug and bullish_cross and ema50_below_200 and not na(last_pivot_low) and long_rr >= min_rr_ratio and not confirmation_long and strategy.position_size == 0
+rejected_short_conf = show_debug and bearish_cross and ema50_above_200 and not na(last_pivot_high) and short_rr >= min_rr_ratio and not confirmation_short and strategy.position_size == 0
+plotchar(rejected_long_conf, "Rejected Long (No Confirmation)", "C", location.belowbar, color.new(color.yellow, 0), size=size.tiny)
+plotchar(rejected_short_conf, "Rejected Short (No Confirmation)", "C", location.abovebar, color.new(color.yellow, 0), size=size.tiny)
+
+// Poor momentum
+rejected_long_mom = show_debug and bullish_cross and ema50_below_200 and not na(last_pivot_low) and long_rr >= min_rr_ratio and confirmation_long and not momentum_long and strategy.position_size == 0
+rejected_short_mom = show_debug and bearish_cross and ema50_above_200 and not na(last_pivot_high) and short_rr >= min_rr_ratio and confirmation_short and not momentum_short and strategy.position_size == 0
+plotchar(rejected_long_mom, "Rejected Long (Weak Momentum)", "M", location.belowbar, color.new(color.purple, 0), size=size.tiny)
+plotchar(rejected_short_mom, "Rejected Short (Weak Momentum)", "M", location.abovebar, color.new(color.purple, 0), size=size.tiny)
+
+// Cooldown period
+rejected_cooldown = show_debug and (bullish_cross or bearish_cross) and not cooldown_ok and strategy.position_size == 0
+plotchar(rejected_cooldown, "In Cooldown Period", "⏸", location.bottom, color.new(color.gray, 0), size=size.tiny)
+
+// Background color for active trades
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 95) : strategy.position_size < 0 ? color.new(color.red, 95) : na)
+
+// Show active stop loss and target levels
+plot(strategy.position_size > 0 ? long_stop : na, "Active Long Stop", color=color.new(color.red, 0), linewidth=2, style=plot.style_cross)
+plot(strategy.position_size < 0 ? short_stop : na, "Active Short Stop", color=color.new(color.red, 0), linewidth=2, style=plot.style_cross)
+plot(strategy.position_size != 0 and use_ema200_target ? htf_ema200 : na, "Active Target", color=color.new(color.yellow, 0), linewidth=2, style=plot.style_circles)
+
+// ========================================
+// POSITION INFO TABLE
+// ========================================
+
+if show_position_info and barstate.islast
+    var table info_table = table.new(position.top_right, 2, 14, bgcolor=color.new(color.black, 10), frame_color=color.gray, frame_width=2, border_width=1)
+    
+    // Header
+    table.cell(info_table, 0, 0, "Metric", text_color=color.white, text_size=size.small, bgcolor=color.new(color.gray, 50))
+    table.cell(info_table, 1, 0, "Value", text_color=color.white, text_size=size.small, bgcolor=color.new(color.gray, 50))
+    
+    // Position info
+    pos_size = strategy.position_size
+    pos_avg_price = strategy.position_avg_price
+    
+    table.cell(info_table, 0, 1, "Position", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 1, pos_size > 0 ? "LONG" : pos_size < 0 ? "SHORT" : "NONE", 
+               text_color=pos_size > 0 ? color.green : pos_size < 0 ? color.red : color.gray, text_size=size.small)
+    
+    table.cell(info_table, 0, 2, "Qty", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 2, str.tostring(math.abs(pos_size), "#.####"), text_color=color.white, text_size=size.small)
+    
+    table.cell(info_table, 0, 3, "Avg Entry", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 3, pos_size != 0 ? "$" + str.tostring(pos_avg_price, "#.##") : "-", text_color=color.white, text_size=size.small)
+    
+    table.cell(info_table, 0, 4, "Stop Loss", text_color=color.white, text_size=size.small)
+    stop_display = pos_size > 0 and not na(long_stop) ? "$" + str.tostring(long_stop, "#.##") : 
+                   pos_size < 0 and not na(short_stop) ? "$" + str.tostring(short_stop, "#.##") : "-"
+    table.cell(info_table, 1, 4, stop_display, text_color=color.red, text_size=size.small)
+    
+    table.cell(info_table, 0, 5, "Target (EMA200)", text_color=color.white, text_size=size.small)
+    target_display = pos_size != 0 ? "$" + str.tostring(htf_ema200, "#.##") : "-"
+    table.cell(info_table, 1, 5, target_display, text_color=color.green, text_size=size.small)
+    
+    // Show Risk:Reward ratio
+    table.cell(info_table, 0, 6, "Risk:Reward", text_color=color.white, text_size=size.small)
+    current_rr = pos_size > 0 ? long_rr : pos_size < 0 ? short_rr : 0
+    rr_display = pos_size != 0 ? "1:" + str.tostring(current_rr, "#.##") : "-"
+    rr_color = current_rr >= min_rr_ratio ? color.green : current_rr > 0 ? color.orange : color.gray
+    table.cell(info_table, 1, 6, rr_display, text_color=rr_color, text_size=size.small)
+    
+    // Calculate current P&L
+    current_pnl = pos_size > 0 ? (close - pos_avg_price) * pos_size : 
+                  pos_size < 0 ? (pos_avg_price - close) * math.abs(pos_size) : 0
+    
+    table.cell(info_table, 0, 7, "Current P&L", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 7, pos_size != 0 ? (current_pnl >= 0 ? "+$" : "-$") + str.tostring(math.abs(current_pnl), "#.##") : "-", 
+               text_color=current_pnl >= 0 ? color.green : color.red, text_size=size.small)
+    
+    table.cell(info_table, 0, 8, "Risk/Trade", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 8, "$" + str.tostring(risk_amount, "#.##"), text_color=color.yellow, text_size=size.small)
+    
+    // Filter status indicators
+    table.cell(info_table, 0, 9, "─ Filters ─", text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 80))
+    table.cell(info_table, 1, 9, "─────", text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 80))
+    
+    table.cell(info_table, 0, 10, "RSI", text_color=color.white, text_size=size.small)
+    rsi_color = rsi >= rsi_long_min ? color.green : rsi <= rsi_short_max ? color.red : color.orange
+    table.cell(info_table, 1, 10, str.tostring(rsi, "#.#"), text_color=rsi_color, text_size=size.small)
+    
+    table.cell(info_table, 0, 11, "Cooldown", text_color=color.white, text_size=size.small)
+    cooldown_display = cooldown_ok ? "Ready" : str.tostring(cooldown_bars - bars_since_stop) + " bars"
+    table.cell(info_table, 1, 11, cooldown_display, text_color=cooldown_ok ? color.green : color.orange, text_size=size.small)
+    
+    table.cell(info_table, 0, 12, "HTF", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 12, higher_timeframe, text_color=color.white, text_size=size.small)
+    
+    table.cell(info_table, 0, 13, "Fees Included", text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 13, include_fees ? "Yes" : "No", text_color=include_fees ? color.green : color.gray, text_size=size.small)
+
+// ========================================
+// ALERTS
+// ========================================
+
+alertcondition(long_condition, "Long Entry Signal", "HTF EMA50 Bullish Cross - Consider Long Entry")
+alertcondition(short_condition, "Short Entry Signal", "HTF EMA50 Bearish Cross - Consider Short Entry")
+

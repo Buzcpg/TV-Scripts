@@ -1,0 +1,407 @@
+---
+globs: trading_performance_analyzer.py,data_converter.py,check_dashboard.py,trading-dashboard/**/*
+description: Guidelines for trading analysis tools (Python scripts and React dashboard)
+---
+
+# Trading Analysis Tools
+
+## Project Components
+
+This project includes analysis tools that complement the Pine Script strategies:
+
+### Python Analysis Scripts
+
+1. **trading_performance_analyzer.py** - Analyzes trading performance from broker exports
+2. **data_converter.py** - Converts broker data formats
+3. **check_dashboard.py** - Validates dashboard data
+
+### React Trading Dashboard
+
+Located in `trading-dashboard/` directory:
+- Real-time trade journaling
+- Performance analytics
+- Position tracking
+- Trade review interface
+
+## Integration Points
+
+### Data Flow
+
+```
+Broker Statements → Python Scripts → JSON Data → React Dashboard
+                                    ↓
+                          Excel Reports (trading_performance_report.xlsx)
+```
+
+### Broker Data Sources
+
+Located in `account statements/` directory:
+- **Breakout**: CSV exports (Breakout - *.csv)
+- **Edgex**: CSV exports (Edgex-*.csv)  
+- **Blofin**: CSV exports (Blofin - *.csv)
+
+**File naming convention**: `Platform - date.csv` or `Platform daterange.pdf`
+
+## Python Scripts Standards
+
+### Expected Functions
+
+**trading_performance_analyzer.py** should provide:
+- CSV parsing for multiple broker formats
+- Trade analysis (win rate, profit factor, R multiples)
+- Period-based performance (daily, weekly, monthly)
+- Export to Excel format
+
+**Code style**:
+```python
+# Use pandas for data manipulation
+import pandas as pd
+
+# Clear function names
+def calculate_win_rate(trades_df):
+    """Calculate win rate from trades dataframe."""
+    winning_trades = trades_df[trades_df['pnl'] > 0]
+    return len(winning_trades) / len(trades_df) * 100
+
+# Handle multiple broker formats
+def parse_broker_csv(filepath, broker_name):
+    """Parse CSV based on broker format."""
+    if broker_name == 'Breakout':
+        # Breakout-specific parsing
+        pass
+    elif broker_name == 'Edgex':
+        # Edgex-specific parsing
+        pass
+```
+
+### Data Cleaning
+
+Common issues with broker data:
+- Inconsistent date formats
+- Fee calculations may differ
+- Multiple currencies
+- Different PnL calculation methods
+
+Always validate and clean data before analysis.
+
+## React Dashboard Integration
+
+### Data Format
+
+Dashboard expects JSON format in `trading-dashboard/public/data/trading_data.json`:
+
+```json
+{
+  "trades": [
+    {
+      "id": "unique_id",
+      "entry_time": "ISO 8601 timestamp",
+      "exit_time": "ISO 8601 timestamp",
+      "symbol": "BTCUSDT",
+      "direction": "LONG" | "SHORT",
+      "entry_price": 50000.00,
+      "exit_price": 51000.00,
+      "quantity": 0.1,
+      "pnl": 100.00,
+      "pnl_pct": 2.0,
+      "fees": 5.00,
+      "exchange": "Breakout",
+      "strategy": "MTF EMA Trend",
+      "notes": "Optional notes"
+    }
+  ],
+  "performance": {
+    "total_trades": 100,
+    "winning_trades": 65,
+    "losing_trades": 35,
+    "win_rate": 65.0,
+    "profit_factor": 2.5,
+    "total_pnl": 5000.00
+  }
+}
+```
+
+### Dashboard Development
+
+When modifying dashboard:
+
+**Component structure**:
+```
+src/
+├── components/
+│   ├── Dashboard.tsx       # Main dashboard
+│   ├── Header.tsx          # Top navigation
+│   ├── cards/              # Reusable card components
+│   └── sections/           # Dashboard sections
+├── pages/                  # Different pages
+├── types/                  # TypeScript types
+└── utils/                  # Helper functions
+```
+
+**TypeScript types**: Defined in `src/types/trading.ts` and `src/types/journal.ts`
+
+**Styling**: Uses CSS modules (App.css, index.css)
+
+## Performance Metrics
+
+### Key Metrics to Track
+
+Must calculate and display:
+- **Win Rate**: Winning trades / Total trades
+- **Profit Factor**: Gross profit / Gross loss
+- **Average Win**: Total profit / Winning trades
+- **Average Loss**: Total loss / Losing trades
+- **R Multiples**: Based on initial risk per trade
+- **Max Drawdown**: Largest peak-to-trough decline
+- **Expectancy**: (Win rate × Avg win) - (Loss rate × Avg loss)
+
+### R Multiple Calculation
+
+Critical for strategy validation:
+
+```python
+def calculate_r_multiple(entry, exit, stop, direction):
+    """Calculate R multiple for a trade."""
+    if direction == 'LONG':
+        risk = abs(entry - stop)
+        reward = exit - entry
+    else:  # SHORT
+        risk = abs(entry - stop)
+        reward = entry - exit
+    
+    if risk == 0:
+        return 0
+    
+    return reward / risk
+```
+
+R multiples validate if strategy meets target (e.g., 2:1, 3:1).
+
+## Broker-Specific Handling
+
+### Breakout
+- Fee structure: 0.035% maker/taker
+- CSV format: Standard columns
+- Timezone: UTC
+
+### Edgex  
+- Fee structure: 0.015% maker, 0.038% taker
+- CSV format: Custom columns
+- May include funding fees
+
+### Blofin
+- Fee structure: 0.02% maker, 0.06% taker
+- CSV format: Detailed trade breakdown
+- Multiple position sizing options
+
+**Always check fee calculations** - they impact net results significantly.
+
+## Data Validation
+
+### Before Analysis
+
+Check for:
+- [ ] Missing timestamps
+- [ ] Invalid PnL calculations
+- [ ] Duplicate trades
+- [ ] Mismatched entries/exits
+- [ ] Currency consistency
+- [ ] Fee reasonableness
+- [ ] Extreme outliers
+
+### Validation Script Pattern
+
+```python
+def validate_trades_data(df):
+    """Validate trades dataframe."""
+    issues = []
+    
+    # Check for missing data
+    if df.isnull().any().any():
+        issues.append("Missing data in some columns")
+    
+    # Check date order
+    if not df['entry_time'].is_monotonic_increasing:
+        issues.append("Trades not in chronological order")
+    
+    # Check PnL reasonableness
+    extreme_pnl = df[abs(df['pnl_pct']) > 50]
+    if len(extreme_pnl) > 0:
+        issues.append(f"{len(extreme_pnl)} trades with >50% PnL")
+    
+    return issues
+```
+
+## Dashboard Scripts
+
+### Starting Dashboard
+
+Use provided scripts:
+- **Windows**: `start_dashboard.bat` or `start_dashboard.ps1`
+- **Manual**: `cd trading-dashboard && npm start`
+
+### Updating Data
+
+Workflow:
+1. Export data from broker
+2. Save to `account statements/[broker]/`
+3. Run Python analysis script
+4. Export to JSON format
+5. Copy to `trading-dashboard/public/data/`
+6. Dashboard auto-refreshes
+
+Or use provided scripts:
+- `update_trading_report.bat`
+- `update_trading_report.ps1`
+
+## Chart Integration
+
+### TradingView to Analysis
+
+Strategy results from [mtf_ema_trend_compound.pine](mdc:mtf_ema_trend_compound.pine):
+1. Run backtest on TradingView
+2. Export trade list
+3. Compare with live broker results
+4. Validate strategy performance matches live results
+
+Look for discrepancies:
+- Slippage (backtest vs live)
+- Fees (accounted for correctly?)
+- Execution delays (market orders)
+- Partial fills (position sizing)
+
+## Common Tasks
+
+### Add New Broker
+
+1. Create directory: `account statements/[broker]/`
+2. Update `data_converter.py` with new format parser
+3. Add fee structure to strategy (lines ~152-169 in .pine file)
+4. Test with sample data
+5. Document format differences
+
+### Export Analysis
+
+```python
+# Generate Excel report
+writer = pd.ExcelWriter('trading_performance_report.xlsx', engine='xlsxwriter')
+
+# Multiple sheets
+trades_df.to_excel(writer, sheet_name='Trades')
+performance_df.to_excel(writer, sheet_name='Performance')
+monthly_df.to_excel(writer, sheet_name='Monthly')
+
+writer.close()
+```
+
+### Add Dashboard Feature
+
+1. Create component in `src/components/`
+2. Define types in `src/types/`
+3. Add to relevant page/section
+4. Update data flow if needed
+5. Test with sample data
+
+## Testing
+
+### Python Scripts
+
+```python
+# Use pytest for testing
+def test_win_rate_calculation():
+    sample_trades = pd.DataFrame({
+        'pnl': [100, -50, 200, -30, 150]
+    })
+    win_rate = calculate_win_rate(sample_trades)
+    assert win_rate == 60.0  # 3 winners out of 5
+```
+
+### Dashboard
+
+```bash
+cd trading-dashboard
+npm test  # Run test suite
+npm run build  # Test production build
+```
+
+## File Management
+
+### Backup Strategy
+
+Important to backup:
+- All CSV exports from brokers
+- Generated Excel reports  
+- JSON data files
+- Dashboard source code
+
+**Don't commit**:
+- Large CSV files (use .gitignore)
+- Personal trading data
+- API keys or credentials
+
+### Organization
+
+```
+account statements/
+├── breakout/
+│   ├── Breakout - pre16.9.25.csv
+│   └── breakout 17.9.25.pdf
+├── edgex/
+│   └── Edgex-pre16.9.25.csv
+└── blofin/
+    └── Blofin - pre16.9.25.csv
+
+trading-dashboard/
+├── public/
+│   └── data/
+│       └── trading_data.json  # Generated data
+└── src/
+    └── [components...]
+
+trading_performance_report.xlsx  # Generated report
+```
+
+## Performance Optimization
+
+### Python
+
+- Use pandas vectorized operations (avoid loops)
+- Cache intermediate results
+- Process data in chunks for large files
+- Use appropriate data types (int64, float32)
+
+### React Dashboard
+
+- Memoize expensive calculations
+- Lazy load components
+- Optimize re-renders
+- Use React.memo for pure components
+- Virtual scrolling for large trade lists
+
+## Integration with Strategy
+
+The analysis tools should validate strategy performance:
+
+1. **Backtest** on TradingView → Expected R multiples
+2. **Live trades** from broker → Actual R multiples  
+3. **Compare** → Adjust strategy if drift occurs
+
+Key question: **Do live results match backtest?**
+
+If not, investigate:
+- Slippage impact
+- Fee accuracy in backtest
+- Execution timing
+- Market conditions changed
+- Strategy parameters different
+
+## Summary
+
+**Analysis tools purpose**:
+- Validate strategy performance
+- Track live trading results
+- Identify areas for improvement
+- Maintain trading journal
+- Calculate accurate metrics
+
+**Key principle**: Analysis tools complement but don't replace the core Pine Script strategy. They validate and track real-world performance.

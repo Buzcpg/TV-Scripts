@@ -1,0 +1,152 @@
+---
+alwaysApply: true
+---
+
+# Pinescript Trading Strategy Project
+
+## Project Overview
+
+This is a **Pine Script trading strategy development project** focused on trend-following strategies with advanced filtering systems.
+
+## Main Strategy
+
+**Primary file**: [mtf_ema_trend_compound.pine](mdc:mtf_ema_trend_compound.pine)
+
+**Strategy Type**: Multi-timeframe EMA trend compound strategy
+- Uses 4 configurable EMAs for trend alignment
+- Implements retest entry logic (pullback then continuation)
+- Includes advanced position management (TP1/TP2/TP3 system)
+- Features 11 filter systems (6 core + 5 optional)
+
+**Current Version**: v47 (October 27, 2025)
+
+## Key Features
+
+### Filter System (11 Total)
+All optional filters are **disabled by default**:
+
+**Core (Always Active)**:
+1. EMA Alignment - Trend definition
+2. Retest Entry - Pullback confirmation
+3. Stop Distance - Risk validation
+
+**Optional Filters**:
+4. 1H 100 MA Filter - Hourly directional bias
+5. 4H 200 EMA Filter - 4-hour directional bias
+6. EMA Ordering Filter - LTF/HTF alignment
+7. CVD Filter - Cumulative volume delta (buying/selling pressure)
+8. RSI Filter - Momentum/overbought-oversold
+9. MACD Filter - Trend momentum confirmation
+10. Orderflow Filter - Multi-timeframe directional pressure analysis
+11. Volatility Filter - Multi-timeframe regime quality
+
+### Design Philosophy
+- **Non-destructive**: Strategy works immediately with defaults
+- **Progressive enhancement**: Enable filters to refine quality
+- **Visual feedback**: Indicators panel shows real-time filter status
+- **Multi-timeframe**: Advanced filters analyze higher timeframes
+
+## Documentation Files
+
+All filter documentation follows three-tier structure:
+
+1. **[FILTERS_GUIDE.md](mdc:FILTERS_GUIDE.md)** - Complete detailed reference (~5000 words)
+2. **[FILTERS_QUICK_REFERENCE.md](mdc:FILTERS_QUICK_REFERENCE.md)** - Cheat sheet and quick lookup
+3. **[FILTERS_SUMMARY.md](mdc:FILTERS_SUMMARY.md)** - Overview and quick start
+
+Other documentation:
+- **[MTF_EMA_README.md](mdc:MTF_EMA_README.md)** - Strategy overview
+- **[MTF_EMA_STRATEGY_GUIDE.md](mdc:MTF_EMA_STRATEGY_GUIDE.md)** - Trading guide
+- Various feature-specific guides (EMA toggles, entry model, etc.)
+
+## Technology Stack
+
+- **Language**: Pine Script v6 (TradingView)
+- **Platform**: TradingView strategy tester
+- **Assets**: Primarily crypto (BTC, ETH, etc.)
+- **Timeframes**: 1m, 5m, 15m, 1H (scalping to day trading)
+
+## Project Structure
+
+```
+/
+├── mtf_ema_trend_compound.pine    # Main strategy
+├── FILTERS_*.md                    # Filter documentation
+├── MTF_EMA_*.md                   # Strategy documentation
+├── other_strategies.pine          # Related strategies
+├── trading-dashboard/             # React-based trading dashboard
+└── account statements/            # Trading records
+```
+
+## Development Workflow
+
+### When Modifying Strategy:
+1. Update [mtf_ema_trend_compound.pine](mdc:mtf_ema_trend_compound.pine)
+2. Increment version number (//vXX - DDMMYY - description)
+3. Update relevant documentation (FILTERS_GUIDE.md, etc.)
+4. Test on TradingView with historical data
+5. Document changes in version history
+
+### When Adding Filters:
+1. Add inputs section (grouped with descriptive tooltips)
+2. Add calculation logic (lines ~234-420)
+3. Build filter conditions (`filter_long_ok`, `filter_short_ok`)
+4. Integrate into entry logic (lines ~828-846)
+5. Add to indicators panel if visual feedback needed
+6. Document in all three FILTERS_*.md files
+
+## Important Conventions
+
+### Code Style:
+- Group inputs with `grp_name = "═══ Section Name ═══"`
+- All optional filters default to `false` (OFF)
+- Use descriptive variable names (`bullish_alignment`, `of_long_ok`, etc.)
+- Comment section headers with `// ========================================`
+
+### Filter Naming:
+- Boolean conditions end in `_ok` (e.g., `cvd_long_ok`)
+- HTF values prefixed with timeframe (e.g., `h1_ma`, `of_htf_close`)
+- Settings prefixed with category (e.g., `vol_atr_length`, `of_lookback`)
+
+### Documentation:
+- Always include examples with actual values
+- Show expected results for configurations
+- Use emoji consistently (✅ ❌ ⭐ 🔥 📊 🎯)
+- Maintain three-tier structure (Guide/Reference/Summary)
+
+## Trading Context
+
+This strategy is used for:
+- **Live trading**: Crypto futures on exchanges (Breakout, Edgex, Blofin)
+- **Backtesting**: TradingView strategy tester
+- **Analysis**: Companion React dashboard for trade journaling
+
+**Risk Management**:
+- Position sizing based on account size and leverage
+- Stop loss validation (min/max distance checks)
+- Multiple take-profit levels (Advanced mode)
+- Visual trade boxes showing risk/reward
+
+## Performance Tracking
+
+Related files:
+- `trading_performance_analyzer.py` - Python analysis scripts
+- `trading_performance_report.xlsx` - Excel reports
+- `trading-dashboard/` - React web dashboard
+- `account statements/` - Broker exports
+
+## Key Principles
+
+1. **Strategy works immediately** - No setup required
+2. **Filters refine quality** - Not requirements
+3. **Visual feedback** - Always show why/why not
+4. **Multi-timeframe awareness** - LTF entry, HTF confirmation
+5. **Risk management first** - Position sizing and stop validation
+6. **Clean R multiples** - Fees set to 0% for accurate R:R tracking
+
+## Getting Help
+
+- Check relevant documentation in FILTERS_*.md or MTF_EMA_*.md
+- Review code comments in strategy file
+- Refer to Cursor rules for development patterns
+- Test changes on TradingView before documentation

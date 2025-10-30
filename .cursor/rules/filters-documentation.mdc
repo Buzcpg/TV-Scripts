@@ -1,0 +1,269 @@
+---
+globs: FILTERS*.md,*_GUIDE.md,*_REFERENCE.md,*_SUMMARY.md
+description: Documentation standards for trading strategy filters
+---
+
+# Filters Documentation Standards
+
+## Documentation Structure
+
+Three-tier documentation system for strategy filters:
+
+### 1. FILTERS_GUIDE.md (Main Guide)
+**Purpose**: Comprehensive reference for all filters
+
+**Required sections**:
+- Overview with filter philosophy
+- Each filter gets dedicated section with:
+  - Purpose statement
+  - Settings explanation with defaults
+  - "How It Works" detailed explanation
+  - "Best For" use cases
+  - Recommended settings for different scenarios
+  - Examples with sample values
+  - Warning signs / interpretation guide
+
+**Format**:
+```markdown
+### X. Filter Name 📊 (Badge if special)
+
+**Purpose**: One-line description
+
+**Settings**:
+- Setting Name (default: value)
+- Boolean toggles (default: ON/OFF)
+
+**How It Works**:
+Detailed explanation with examples
+
+**Best For**:
+- Use case 1
+- Use case 2
+
+**Recommended**:
+- Scenario: Parameter ranges
+```
+
+### 2. FILTERS_QUICK_REFERENCE.md (Cheat Sheet)
+**Purpose**: Fast lookup during trading
+
+**Required sections**:
+- Filter categories table
+- Filter comparison table (impact, signal reduction)
+- Preset configurations (Beginner/Balanced/Quality/etc.)
+- Visual panel guide
+- Quick decision trees
+- Parameter tuning cheat sheet
+- Use case matrix
+- Common mistakes (❌/✅ format)
+
+**Format**: Tables, bullet points, code blocks
+**Tone**: Quick, actionable, scannable
+
+### 3. FILTERS_SUMMARY.md (Overview)
+**Purpose**: Introduction and quick start
+
+**Required sections**:
+- What's new (version highlights)
+- All available filters table
+- New filter details (if applicable)
+- How to use (step-by-step)
+- Recommended starting configuration
+- Documentation file descriptions
+- Quick start checklist
+- Version history
+
+## Writing Style
+
+### Technical Explanations
+- Use examples with actual values
+- Show calculations step-by-step
+- Include code snippets where helpful
+- Explain WHY not just WHAT
+
+### User Guidance
+- Start with simplest approach
+- Progressive complexity
+- Always show expected results
+- Include troubleshooting
+
+### Examples Format
+```
+Example:
+Chart: 5m
+Filter Timeframe: 15m
+Setting: 60%
+
+Analysis: [step by step calculation]
+
+Result: LONG entries allowed ✓
+```
+
+## Emoji Usage
+
+**Consistent badges**:
+- ⭐ New features
+- ✅ Correct approach
+- ❌ Wrong approach  
+- 🔥 Important/popular
+- 📊 Charts/data
+- 🎯 Goals/targets
+- 💡 Tips/insights
+- ⚡ Quick actions
+- 🚀 Getting started
+- 📈 Trading/performance
+- 🎨 Visual elements
+- 🔧 Technical/settings
+- ⚠️ Warnings
+
+Use sparingly in main explanations, more in quick reference.
+
+## Filter Documentation Template
+
+When adding new filter, include:
+
+### In FILTERS_GUIDE.md:
+```markdown
+### X. Filter Name 🔄 (Multi-Timeframe if applicable)
+
+**Purpose**: What problem does it solve?
+
+**Settings**:
+- List all input parameters
+- Show defaults
+- Explain what each does
+
+**How It Works**:
+1. Step 1 of calculation
+2. Step 2 of calculation
+3. How decision is made
+
+**Best For**:
+- Trading style 1
+- Market condition 1
+- Specific use case
+
+**Timeframe Selection**: (if MTF)
+- Chart X → Filter Y
+- Explanation of relationship
+
+**Interpretation**:
+- Value range 1 = meaning
+- Value range 2 = meaning
+
+**Warning Signs**:
+- Red flag 1 = what it means
+- Red flag 2 = what to do
+
+**Advanced Strategy**:
+- Parameter set 1: Use case
+- Parameter set 2: Use case
+```
+
+### In FILTERS_QUICK_REFERENCE.md:
+Add to:
+- Filter categories table
+- Filter comparison table (with impact %)
+- Relevant preset configurations
+- Parameter tuning section
+
+### In FILTERS_SUMMARY.md:
+- Add to version history
+- If new: Create "What's New" section with highlights
+- Add to complete filter list
+- Update recommended configurations if needed
+
+## Maintenance
+
+**When updating strategy**:
+1. Update version number in all docs
+2. Add to version history in FILTERS_SUMMARY.md
+3. If filter modified: Update all three docs
+4. If new filter: Full documentation in all three
+5. Keep examples up-to-date with current defaults
+
+**Consistency checks**:
+- Default values match strategy code
+- Settings descriptions match tooltips
+- Examples use realistic market data
+- All filters listed in all three docs
+
+## Quick Reference Tables
+
+**Always include**:
+- Comparison table (signal reduction, win rate impact)
+- Preset configurations table
+- Use case matrix
+- Parameter tuning guide
+
+**Table format**:
+```markdown
+| Filter | Type | Impact | Best For |
+|--------|------|--------|----------|
+| Name | Category | 30-40% | Use case |
+```
+
+## Code Blocks
+
+**Use code blocks for**:
+- Setting combinations
+- Panel display examples
+- Expected output
+- Configuration examples
+
+**Format**:
+```
+Configuration Name:
+✓ Enabled feature
+✗ Disabled feature
+Expected: Results description
+```
+
+## Progressive Disclosure
+
+**Beginner → Advanced flow**:
+1. Start with "Why use this filter?"
+2. Show simplest configuration
+3. Explain basic settings
+4. Show advanced configurations
+5. Explain edge cases
+6. Show optimization strategies
+
+**Quick Start sections**:
+Always provide copy-paste ready configurations:
+```
+Week 1: Config A
+Week 2: Add feature B
+Week 3: Optimize C
+```
+
+## Troubleshooting Sections
+
+**Required format**:
+```markdown
+### "Problem Statement"
+
+**Check**:
+1. Diagnostic 1
+2. Diagnostic 2
+
+**Solution**: Step-by-step fix
+```
+
+Group by:
+- No signals
+- Too many signals  
+- Poor quality signals
+- Technical issues
+
+## Version Documentation
+
+**Version history format**:
+```markdown
+**vXX** (MMM DD, YYYY):
+- ⭐ Added Feature A
+- ⭐ Added Feature B  
+- Enhanced Feature C
+```
+
+Keep last 5-10 versions visible, archive older.

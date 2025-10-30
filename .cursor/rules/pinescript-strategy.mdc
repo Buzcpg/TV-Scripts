@@ -1,0 +1,493 @@
+---
+description: Guidelines for modifying Pine Script trading strategies in this project
+---
+
+# Pine Script Strategy Guidelines
+
+## Project Strategy: MTF EMA Trend Compound
+
+Main strategy file: [mtf_ema_trend_compound.pine](mdc:mtf_ema_trend_compound.pine)
+
+**Current Version**: v50 (October 28, 2025)
+
+### Core Architecture
+
+1. **Version**: Pine Script v6 (latest)
+2. **Strategy Type**: Multi-timeframe EMA trend following with position management
+3. **Commission**: Set to 0% for clean R multiples (fees tracked separately)
+4. **Key Features**:
+   - 4 configurable EMAs with individual enable/disable toggles
+   - Multiple stop loss methods (Pivot, ATR, EMA-based)
+   - Selectable entry EMA (1-4) for retest detection
+   - Wick vs Close cross detection methods
+   - 11 filter systems (6 core + 5 optional)
+   - Advanced position management (TP1/TP2/TP3)
+   - Real-time visual feedback panels
+
+### Filter System Design
+
+**All optional filters MUST be disabled by default** to ensure strategy works immediately:
+```pine
+use_filter_name = input.bool(false, "Enable Filter Name", ...)
+```
+
+**Filter categories**:
+- **Core Filters** (always active): EMA alignment, retest entry, stop distance validation
+- **HTF Directional Filters**: 1H/4H MA/EMA filters, EMA ordering, HTF cooldown
+- **Momentum Filters**: CVD, RSI, MACD
+- **Advanced MTF Filters**: Orderflow, Volatility
+- **Time-Based Filters**: Trend duration filter
+
+### Code Organization Pattern
+
+1. **Input Settings** (lines ~35-195)
+   - Group inputs by category using `grp_name = "═══ Section Name ═══"`
+   - Use descriptive tooltips for all inputs
+   - Follow pattern: enable toggle → settings for that feature
+   - Stop loss settings (~59-76)
+   - Risk & Position settings (~78-104)
+   - Strategy settings (~107-115) including entry EMA and cross detection
+   - HTF filters (~117-135) including cooldown settings
+   - All optional filters (~137-182)
+
+2. **Calculations** (lines ~234-500)
+   - Calculate all EMAs first
+   - Calculate indicators (CVD, RSI, MACD, etc.)
+   - Request HTF data using `request.security()`
+   - Calculate HTF cooldown tracking
+   - Build filter conditions (bool variables ending in `_ok`)
+
+3. **EMA Alignment & Trend Detection** (lines ~600-700)
+   - Build `bullish_alignment` and `bearish_alignment`
+   - Calculate `bullish_trend` and `bearish_trend`
+   - **Important**: Trend duration filter must come AFTER these are defined
+
+4. **Entry Logic** (lines ~980-1020)
+   - Build combined `additional_filters_long` and `additional_filters_short`
+   - Each filter only applies if enabled: `if use_filter then filters := filters and filter_ok`
+   - HTF cooldown integrated here
+
+5. **Visualizations** (lines ~1300+)
+   - Plot EMAs with color coding
+   - Create info panels using `table.new()`
+   - Show trade boxes for entries/exits
+   - Display filter status in indicators panel
+
+### New Features (v48-v50)
+
+#### 1. EMA-Based Stop Loss (v48)
+**Purpose**: Use an EMA as the stop level instead of pivots or ATR
+
+**Implementation**:
+```pine
+// In stop loss settings
+stop_loss_method = input.string("Pivot", options=["Pivot", "ATR", "EMA"])
+stop_ema_choice = input.string("EMA2", options=["EMA1", "EMA2", "EMA3", "EMA4"])
+
+// In entry calculation
+if stop_loss_method == "EMA"
+    if stop_ema_choice == "EMA2" and use_ema2
+        stop := ema2
+    // ... (with fallback logic if selected EMA disabled)
+```
+
+**Use Case**: Allows dynamic stops at EMA levels, good for tight scalping or wide swing stops
+
+#### 2. Selectable Entry EMA (v48)
+**Purpose**: Choose which EMA triggers the entry retest/cross
+
+**Implementation**:
+```pine
+// In strategy settings
+entry_ema_choice = input.string("EMA1", options=["EMA1", "EMA2", "EMA3", "EMA4"])
+
+// In retest detection (~710-763)
+float retest_ema = na
+if entry_ema_choice == "EMA1" and use_ema1
+    retest_ema := ema1
+else if entry_ema_choice == "EMA2" and use_ema2
+    retest_ema := ema2
+// ... with fallback to first enabled EMA
+```
+
+**Use Case**: Enter on deeper pullbacks (EMA2/3) or faster entries (EMA1)
+
+#### 3. Wick vs Close Cross Detection (v48)
+**Purpose**: Control how EMA crosses are detected - full close beyond or wick touch
+
+**Implementation**:
+```pine
+cross_detection_method = input.string("Close", options=["Close", "Wick"])
+
+// In retest logic (~730-755)
+if cross_detection_method == "Close"
+    // Standard: candle must close beyond EMA
+    currently_below := close < retest_ema
+    currently_above := close > retest_ema
+else  // "Wick"
+    // Aggressive: wicked to EMA but closed on correct side
+    currently_below := low < retest_ema and close >= retest_ema
+    currently_above := high > retest_ema and close <= retest_ema
+```
+
+**Use Case**: 
+- "Close" = conservative confirmation
+- "Wick" = aggressive scalping, catch quick taps
+
+#### 4. Trend Duration Filter (v49)
+**Purpose**: Require trend to be established for minimum time before trading
+
+**Implementation**:
+```pine
+// Settings
+use_trend_time_filter = input.bool(false, "Enable Trend Duration Filter")
+trend_time_method = input.string("Hours", options=["Hours", "Bars"])
+trend_min_hours = input.float(12, "Minimum Trend Hours")
+trend_min_bars = input.int(50, "Minimum Trend Bars")
+trend_check_ema_separation = input.bool(true, "Require Increasing Separation")
+
+// Tracking (AFTER bullish_alignment defined, ~645-700)
+var int bullish_trend_bars = 0
+var int bearish_trend_bars = 0
+
+if bullish_alignment
+    bullish_trend_bars := bullish_trend_bars + 1
+    bearish_trend_bars := 0
+// ... counter logic
+
+// Convert hours to bars
+get_bars_per_hour() =>
+    timeframe_minutes = timeframe.in_seconds() / 60
+    bars_per_hour = 60 / timeframe_minutes
+    bars_per_hour
+
+// Integration
+if use_trend_time_filter
+    additional_filters_long := additional_filters_long and trend_time_long_ok
+    additional_filters_short := additional_filters_short and trend_time_short_ok
+```
+
+**Use Case**: Avoid choppy periods, only trade established trends
+**Anti-Pattern**: Don't place this code before `bullish_alignment` is defined!
+
+#### 5. HTF Level Cooldown (v50)
+**Purpose**: Wait X hours after price interacts with 1H/4H levels to avoid chop
+
+**Implementation**:
+```pine
+// Settings
+use_htf_cooldown = input.bool(false, "Enable HTF Level Cooldown")
+htf_cooldown_hours = input.float(12, "Cooldown Period (Hours)")
+htf_cooldown_interaction = input.string("Touch", options=["Touch", "Cross"])
+
+// Tracking (~447-499)
+var int last_h1_interaction_bar = -99999
+var int last_h4_interaction_bar = -99999
+
+// Detect interaction
+h1_interaction = false
+if use_1h_filter
+    if htf_cooldown_interaction == "Touch"
+        h1_interaction := (low <= h1_ma and high >= h1_ma)
+    else  // "Cross"
+        h1_interaction := ta.cross(close, h1_ma)
+    
+    if h1_interaction
+        last_h1_interaction_bar := bar_index
+
+// Calculate cooldown
+bars_since_h1_interaction = bar_index - last_h1_interaction_bar
+bars_per_hour_htf = timeframe.in_seconds() / 3600
+htf_cooldown_bars = int(htf_cooldown_hours / bars_per_hour_htf)
+h1_cooldown_ok = bars_since_h1_interaction >= htf_cooldown_bars
+
+// Integration
+if use_htf_cooldown
+    additional_filters_long := additional_filters_long and htf_cooldown_ok
+    additional_filters_short := additional_filters_short and htf_cooldown_ok
+```
+
+**Use Case**: Avoid entries right after price bounces off major levels
+**Visual Feedback**: Shows "WAIT ⏳" with hours remaining in info panel
+
+### Adding New Filters
+
+**Required steps**:
+1. Add input settings in appropriate group
+2. Calculate indicator values
+3. Build `filter_long_ok` and `filter_short_ok` conditions
+4. Integrate into `additional_filters_long/short`
+5. Add to indicators panel if applicable
+6. Update version comment and documentation
+
+**Example pattern**:
+```pine
+// 1. Inputs
+grp_myfilter = "═══ My Filter ═══"
+use_myfilter = input.bool(false, "Enable My Filter", group=grp_myfilter,
+    tooltip="What this filter does")
+myfilter_param = input.int(14, "Parameter", group=grp_myfilter)
+
+// 2. Calculation (place appropriately based on dependencies)
+myfilter_value = ta.sma(close, myfilter_param)
+myfilter_long_ok = close > myfilter_value
+myfilter_short_ok = close < myfilter_value
+
+// 3. Integration (in entry logic section)
+if use_myfilter
+    additional_filters_long := additional_filters_long and myfilter_long_ok
+    additional_filters_short := additional_filters_short and myfilter_short_ok
+```
+
+### Multi-Timeframe Filters
+
+For HTF analysis, use `request.security()`:
+```pine
+// Single value
+htf_value = request.security(syminfo.tickerid, "60", 
+    ta.atr(length), 
+    gaps=barmerge.gaps_off, 
+    lookahead=barmerge.lookahead_off)
+
+// Multiple values (tuple syntax)
+[htf_open, htf_close, htf_high, htf_low] = request.security(
+    syminfo.tickerid, timeframe, 
+    [open, close, high, low],
+    gaps=barmerge.gaps_off,
+    lookahead=barmerge.lookahead_off)
+```
+
+**Important**:
+- **NEVER** use loop variables inside `request.security()` calls
+- Request data once, then loop through series history
+- Always use `gaps=barmerge.gaps_off` and `lookahead=barmerge.lookahead_off`
+
+**Common timeframe strings**: "5", "15", "30", "60", "240", "D", "W"
+
+### Documentation Requirements
+
+When adding/modifying features, update:
+1. Version comment in strategy header (lines ~18-25)
+2. [FILTERS_GUIDE.md](mdc:FILTERS_GUIDE.md) - Detailed explanation
+3. [FILTERS_QUICK_REFERENCE.md](mdc:FILTERS_QUICK_REFERENCE.md) - Quick lookup
+4. [FILTERS_SUMMARY.md](mdc:FILTERS_SUMMARY.md) - Overview
+5. Create dedicated guide for major features (e.g., `TREND_DURATION_FILTER_GUIDE.md`)
+
+### Common Patterns
+
+**Boolean filter conditions**:
+```pine
+// Build condition with multiple requirements
+filter_ok = true
+if require_condition_1
+    filter_ok := filter_ok and condition_1
+if require_condition_2
+    filter_ok := filter_ok and condition_2
+```
+
+**Respecting enabled EMAs**:
+```pine
+if use_ema1 and use_ema2
+    bullish_alignment := bullish_alignment and ema1 > ema2
+```
+
+**Panel display with status**:
+```pine
+table.cell(table_id, col, row, "Label", 
+    text_color=color.white, 
+    text_size=size.small)
+
+// Status with color coding
+status_text = condition_ok ? "READY ✓" : "WAIT ⏳"
+status_color = condition_ok ? color.green : color.orange
+table.cell(table_id, 1, row, status_text, text_color=status_color)
+```
+
+**Time-based tracking**:
+```pine
+// Track bar index of events
+var int last_event_bar = -99999
+if event_occurs
+    last_event_bar := bar_index
+
+// Calculate time elapsed
+bars_since_event = bar_index - last_event_bar
+bars_per_hour = timeframe.in_seconds() / 3600
+hours_since_event = bars_since_event * bars_per_hour
+```
+
+### Variable Naming Conventions
+
+**Filter conditions**: End with `_ok`
+```pine
+rsi_long_ok = rsi > 40 and rsi < 70
+cvd_short_ok = cvd < 0 and cvd_falling
+```
+
+**HTF values**: Prefix with timeframe or `htf_`
+```pine
+h1_ma = request.security(..., "60", ...)
+h4_ema = request.security(..., "240", ...)
+htf_atr = request.security(..., vol_timeframe, ...)
+```
+
+**Settings**: Prefix with category
+```pine
+vol_atr_length = input.int(14, ...)
+of_lookback = input.int(10, ...)
+trend_min_hours = input.float(12, ...)
+```
+
+**Tracking variables**: Use `var` for persistence
+```pine
+var int bullish_trend_bars = 0
+var int last_interaction_bar = -99999
+var array<float> vol_history = array.new<float>(0)
+```
+
+### Testing New Features
+
+1. Start with feature disabled by default
+2. Test with feature enabled on known good trending period
+3. Test with feature enabled on known choppy period  
+4. Verify indicators panel shows correct status
+5. Test parameter ranges (min/max values)
+6. Check for NA value handling
+7. Verify cooldown/tracking logic works across bar transitions
+8. Test with different timeframes
+9. Update documentation before committing
+10. Increment version number
+
+### Code Order Dependencies
+
+**Critical order requirements**:
+1. EMAs must be calculated before alignment checks
+2. `bullish_alignment` and `bearish_alignment` must be defined before trend duration filter
+3. `bullish_trend` and `bearish_trend` must be defined before using them
+4. HTF data must be requested before HTF filters
+5. All filter `_ok` conditions must be defined before integration section
+
+**Incorrect placement will cause compilation errors!**
+
+### Version Numbering
+
+Pattern: `//vXX - DDMMYY - description of changes`
+
+Increment version for:
+- New filters added
+- New features (stop methods, entry methods, etc.)
+- Major logic changes
+- Breaking changes to settings
+
+Minor tweaks don't require version bump.
+
+### Performance Considerations
+
+**Efficient practices**:
+- Calculate indicators once, use everywhere
+- Use `var` for variables that persist across bars
+- Request HTF data once, analyze on current timeframe
+- Avoid nested loops with `request.security()`
+- Use tuple syntax for multiple HTF values
+
+**Memory management**:
+```pine
+// For arrays, limit size
+if array.size(history) > max_size
+    array.shift(history)  // Remove oldest element
+```
+
+### Common Pitfalls
+
+❌ **Using loop variables in request.security()**
+```pine
+// BAD - will fail to compile
+for i = 0 to lookback - 1
+    bar_data = request.security(..., close[i], ...)
+```
+
+✅ **Request once, loop through series**
+```pine
+// GOOD
+htf_close = request.security(..., close, ...)
+for i = 0 to lookback - 1
+    bar_data = htf_close[i]  // Access series history
+```
+
+❌ **Using variables before definition**
+```pine
+// BAD - bullish_alignment not defined yet
+if bullish_alignment
+    counter += 1
+// ... (later)
+bullish_alignment = ema1 > ema2
+```
+
+✅ **Define before use**
+```pine
+// GOOD
+bullish_alignment = ema1 > ema2
+// ... (later)
+if bullish_alignment
+    counter += 1
+```
+
+❌ **Initializing bool with na**
+```pine
+// BAD - bool can't be na
+bool currently_below = na
+```
+
+✅ **Initialize with false/true**
+```pine
+// GOOD
+bool currently_below = false
+```
+
+### Info Panel Integration
+
+When adding features to info panel:
+1. Show enabled/disabled status
+2. Show current values (color-coded)
+3. Show time remaining for cooldowns
+4. Use clear symbols (✓ ✗ ⏳ ↑ ↓)
+5. Color code: 🟢 green=ready/pass, 🟠 orange=wait/blocked, 🔴 red=fail
+
+Example:
+```pine
+if use_feature
+    table.cell(info, 0, row, "Feature Status")
+    status = feature_ok ? "READY ✓" : "WAIT ⏳"
+    status_color = feature_ok ? color.green : color.orange
+    table.cell(info, 1, row, status, text_color=status_color)
+    row := row + 1
+    
+    // Show details if blocked
+    if not feature_ok
+        table.cell(info, 0, row, "Time Left")
+        table.cell(info, 1, row, str.tostring(hours_left, "#.#") + "h",
+            text_color=color.orange)
+        row := row + 1
+```
+
+### Strategy Validation
+
+Before considering a change complete:
+- [ ] Code compiles without errors
+- [ ] Linter shows no issues (except v5/v6 warning)
+- [ ] All filters have both `_long_ok` and `_short_ok` conditions
+- [ ] New features disabled by default
+- [ ] Info panel updated (if applicable)
+- [ ] All three documentation files updated
+- [ ] Version number incremented
+- [ ] Tested on trending and choppy periods
+- [ ] Parameter min/max values set appropriately
+- [ ] Tooltips added to all inputs
+
+### Related Documentation
+
+- [ENTRY_AND_STOP_OPTIONS_UPDATE.md](mdc:ENTRY_AND_STOP_OPTIONS_UPDATE.md) - v48 features
+- [TREND_DURATION_FILTER_GUIDE.md](mdc:TREND_DURATION_FILTER_GUIDE.md) - v49 feature
+- [HTF_COOLDOWN_GUIDE.md](mdc:HTF_COOLDOWN_GUIDE.md) - v50 feature
+- [FILTERS_GUIDE.md](mdc:FILTERS_GUIDE.md) - Complete filter reference
+- [MTF_EMA_STRATEGY_GUIDE.md](mdc:MTF_EMA_STRATEGY_GUIDE.md) - Full strategy guide

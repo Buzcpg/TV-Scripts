@@ -1,0 +1,966 @@
+//@version=6
+indicator("Buz - Market Order Bubbles - LTF Enhanced", shorttitle="Buz - MOB LTF", overlay=true, max_labels_count=500)
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+
+// ===== LTF DATA SETTINGS =====
+useLTFData = input.bool(true, "Use Lower Timeframe Data", 
+     tooltip="When enabled, uses lower timeframe candles for more accurate volume analysis",
+     group="LTF Data")
+ltfMultiplier = input.int(5, "LTF Multiplier", minval=2, maxval=20, 
+     tooltip="How many LTF candles to analyze per HTF candle (e.g., 5 = analyze 5x lower timeframe)",
+     group="LTF Data")
+minTimeframeForLTF = input.string("5", "Minimum TF for LTF Analysis", 
+     options=["1", "5", "15", "30", "60"],
+     tooltip="Below this timeframe, use tick-based realtime method instead",
+     group="LTF Data")
+
+// ===== BUBBLE LEVELS (VISIBILITY & SIZE) =====
+showSmallBubbles = input.bool(false, "Show Small", inline="small", group="Bubble Levels")
+smallBubbleSize = input.string("Small", "Size", options=["Tiny", "Small", "Normal", "Large", "Huge"], 
+     inline="small", group="Bubble Levels")
+
+showMediumBubbles = input.bool(true, "Show Medium", inline="medium", group="Bubble Levels")
+mediumBubbleSize = input.string("Tiny", "Size", options=["Tiny", "Small", "Normal", "Large", "Huge"], 
+     inline="medium", group="Bubble Levels")
+
+showLargeBubbles = input.bool(true, "Show Large", inline="large", group="Bubble Levels")
+largeBubbleSize = input.string("Large", "Size", options=["Tiny", "Small", "Normal", "Large", "Huge"], 
+     inline="large", group="Bubble Levels")
+
+// ===== THRESHOLD SETTINGS =====
+thresholdMethod = input.string("EMA/STDEV", "Threshold Method", 
+     options=["EMA/STDEV", "Fixed Volume"],
+     tooltip="EMA/STDEV: Dynamic thresholds based on market activity\nFixed Volume: Set specific volume delta thresholds per timeframe", 
+     group="Thresholds")
+
+// EMA/STDEV Settings (Dynamic) - uses multipliers
+thresholdEmaLength = input.int(20, "EMA Length", minval=1, maxval=200, 
+     tooltip="Exponential Moving Average period for volume delta baseline. Lower = more sensitive to recent changes", 
+     group="Thresholds")
+thresholdStdevLength = input.int(20, "STDEV Length", minval=1, maxval=200, 
+     tooltip="Standard Deviation period for volatility measurement. Creates dynamic thresholds that adapt to market conditions", 
+     group="Thresholds")
+
+// ===== TIMEFRAME-SPECIFIC MULTIPLIERS (for EMA/STDEV method) =====
+// 1m - 15m
+tf1m_small = input.float(3, "1m S", inline="1m", group="TF Multipliers")
+tf1m_med = input.float(5, "M", inline="1m", group="TF Multipliers")
+tf1m_large = input.float(8, "L", inline="1m", group="TF Multipliers")
+
+tf5m_small = input.float(3, "5m S", inline="5m", group="TF Multipliers")
+tf5m_med = input.float(5, "M", inline="5m", group="TF Multipliers")
+tf5m_large = input.float(8, "L", inline="5m", group="TF Multipliers")
+
+tf15m_small = input.float(3, "15m S", inline="15m", group="TF Multipliers")
+tf15m_med = input.float(5, "M", inline="15m", group="TF Multipliers")
+tf15m_large = input.float(8, "L", inline="15m", group="TF Multipliers")
+
+// 30m - 1h
+tf30m_small = input.float(3, "30m S", inline="30m", group="TF Multipliers")
+tf30m_med = input.float(5, "M", inline="30m", group="TF Multipliers")
+tf30m_large = input.float(8, "L", inline="30m", group="TF Multipliers")
+
+tf1h_small = input.float(3, "1h S", inline="1h", group="TF Multipliers")
+tf1h_med = input.float(5, "M", inline="1h", group="TF Multipliers")
+tf1h_large = input.float(8, "L", inline="1h", group="TF Multipliers")
+
+// 2-4h
+tf2h_small = input.float(3, "2h S", inline="2h", group="TF Multipliers")
+tf2h_med = input.float(5, "M", inline="2h", group="TF Multipliers")
+tf2h_large = input.float(8, "L", inline="2h", group="TF Multipliers")
+
+tf4h_small = input.float(3, "4h S", inline="4h", group="TF Multipliers")
+tf4h_med = input.float(5, "M", inline="4h", group="TF Multipliers")
+tf4h_large = input.float(8, "L", inline="4h", group="TF Multipliers")
+
+// ===== TIMEFRAME-SPECIFIC VOLUMES (for Fixed Volume method) =====
+// 1m - 15m
+tf1m_vol_s = input.int(3, "1m S", inline="1mv", group="TF Volumes")
+tf1m_vol_m = input.int(5, "M", inline="1mv", group="TF Volumes")
+tf1m_vol_l = input.int(8, "L", inline="1mv", group="TF Volumes")
+
+tf5m_vol_s = input.int(5, "5m S", inline="5mv", group="TF Volumes")
+tf5m_vol_m = input.int(10, "M", inline="5mv", group="TF Volumes")
+tf5m_vol_l = input.int(20, "L", inline="5mv", group="TF Volumes")
+
+tf15m_vol_s = input.int(10, "15m S", inline="15mv", group="TF Volumes")
+tf15m_vol_m = input.int(30, "M", inline="15mv", group="TF Volumes")
+tf15m_vol_l = input.int(50, "L", inline="15mv", group="TF Volumes")
+
+// 30m - 1h
+tf30m_vol_s = input.int(20, "30m S", inline="30mv", group="TF Volumes")
+tf30m_vol_m = input.int(50, "M", inline="30mv", group="TF Volumes")
+tf30m_vol_l = input.int(100, "L", inline="30mv", group="TF Volumes")
+
+tf1h_vol_s = input.int(50, "1h S", inline="1hv", group="TF Volumes")
+tf1h_vol_m = input.int(100, "M", inline="1hv", group="TF Volumes")
+tf1h_vol_l = input.int(200, "L", inline="1hv", group="TF Volumes")
+
+// 2-4h
+tf2h_vol_s = input.int(100, "2h S", inline="2hv", group="TF Volumes")
+tf2h_vol_m = input.int(200, "M", inline="2hv", group="TF Volumes")
+tf2h_vol_l = input.int(400, "L", inline="2hv", group="TF Volumes")
+
+tf4h_vol_s = input.int(200, "4h S", inline="4hv", group="TF Volumes")
+tf4h_vol_m = input.int(400, "M", inline="4hv", group="TF Volumes")
+tf4h_vol_l = input.int(800, "L", inline="4hv", group="TF Volumes")
+
+// ===== DISPLAY SETTINGS =====
+bubblePosition = input.string("LTF POC", "Bubble Position", 
+     options=["LTF POC", "LTF Close", "LTF VWAP", "High/Low (Legacy)"],
+     group="Display")
+useGradient = input.bool(true, "Strength Gradient Color", group="Display")
+showDeltaValue = input.bool(false, "Show Delta Values", 
+     tooltip="Display delta number inside bubble", group="Display")
+showBubbleTooltip = input.bool(true, "Show Tooltips", group="Display")
+showLTFCandles = input.bool(false, "Show LTF Candle Markers", 
+     tooltip="Display small markers showing analyzed LTF candles", group="Display")
+
+// ===== FILTERS =====
+minVolumePct = input.float(20, "Minimum Volume % of Avg", minval=0, maxval=200, 
+     tooltip="Ignore bubbles if LTF volume is below this % of average volume", group="Filters")
+clusterDistance = input.int(3, "Cluster Distance (bars)", minval=1, maxval=10,
+     tooltip="Merge bubbles within this many LTF bars", group="Filters")
+appearanceDelay = input.int(0, "Appearance Delay (bars)", minval=0, maxval=50, group="Filters")
+
+// ===== COLORS =====
+buyColor = input.color(color.new(color.green, 20), "Buy Bubble", group="Colors")
+sellColor = input.color(color.new(color.red, 20), "Sell Bubble", group="Colors")
+ltfMarkerColor = input.color(color.new(color.gray, 60), "LTF Marker", group="Colors")
+
+// ===== DASHBOARD =====
+showDashboard = input.bool(true, "Show Dashboard", group="Dashboard")
+dashboardYpos = input.string("top", "Position Vertical", options=["top", "middle", "bottom"], inline="pos", group="Dashboard")
+dashboardXpos = input.string("right", "Horizontal", options=["left", "center", "right"], inline="pos", group="Dashboard")
+dashboardSize = input.string("normal", "Text Size", options=["tiny", "small", "normal", "large"], group="Dashboard")
+lookbackBars = input.int(50, "Lookback Bars", minval=1, maxval=200, 
+     tooltip="How many bars to analyze for dashboard statistics", group="Dashboard")
+showDebugInfo = input.bool(false, "Show Debug Info", 
+     tooltip="Display technical details (HTF/LTF, thresholds, etc.)", group="Dashboard")
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+// Get the appropriate lower timeframe based on current chart timeframe
+f_getLowerTimeframe() =>
+    currentTFMinutes = timeframe.in_seconds(timeframe.period) / 60
+    ltfMinutes = math.max(1, math.floor(currentTFMinutes / ltfMultiplier))
+    
+    // Convert to timeframe string - ensure whole numbers only
+    ltfString = ""
+    if ltfMinutes >= 1440
+        days = math.floor(ltfMinutes / 1440)
+        ltfString := str.tostring(days) + "D"
+    else if ltfMinutes >= 60
+        hours = math.floor(ltfMinutes / 60)
+        ltfString := str.tostring(hours)
+    else
+        ltfString := str.tostring(ltfMinutes)
+    
+    ltfString
+
+// Calculate POC (Point of Control) - the price with most volume in the candle
+f_calculatePOC(o, h, l, c, v) =>
+    // POC estimation using volume-weighted price
+    // We estimate where most volume occurred based on candle structure
+    barRange = h - l
+    
+    if barRange == 0 or na(v)
+        c // Return close if no range
+    else
+        // Calculate body and wick sizes
+        bodyTop = math.max(o, c)
+        bodyBottom = math.min(o, c)
+        bodySize = bodyTop - bodyBottom
+        upperWick = h - bodyTop
+        lowerWick = bodyBottom - l
+        
+        // Volume distribution weights (body typically has more volume)
+        bodyWeight = 0.5
+        wickWeight = 0.25
+        
+        // Calculate weighted POC
+        // If strong directional candle, POC is typically in the body
+        poc = 0.0
+        if bodySize > barRange * 0.6
+            // Strong directional move - POC in middle of body
+            poc := (bodyTop + bodyBottom) / 2
+        else if bodySize < barRange * 0.2
+            // Doji-like - POC near middle of entire range
+            poc := (h + l) / 2
+        else
+            // Mixed - weight towards body but consider wicks
+            bodyMid = (bodyTop + bodyBottom) / 2
+            totalMid = (h + l) / 2
+            poc := bodyMid * 0.6 + totalMid * 0.4
+        
+        poc
+
+// Calculate VWAP for a single candle
+f_calculateVWAP(o, h, l, c, v) =>
+    // Simple approximation: typical price weighted by volume
+    typical = (h + l + c) / 3
+    typical
+
+// Calculate volume delta for a single candle (used in LTF analysis)
+f_singleCandleVolumeDelta(o, h, l, c, v) =>
+    barRange = h - l
+    
+    if barRange == 0 or na(v)
+        [v, 0.0, 0.0, c]
+    else
+        // Close position within bar (0 to 1)
+        closePosition = (c - l) / barRange
+        
+        // Wick analysis for better accuracy
+        upperWick = h - math.max(c, o)
+        lowerWick = math.min(c, o) - l
+        bodySize = math.abs(c - o)
+        
+        // Volume distribution estimation
+        upperWickVol = v * (upperWick / barRange)
+        lowerWickVol = v * (lowerWick / barRange)
+        bodyVol = v * (bodySize / barRange)
+        
+        // Calculate buy and sell volume
+        buyVolume = 0.0
+        sellVolume = 0.0
+        
+        if c >= o
+            // Bullish candle
+            buyVolume := bodyVol * 1.2 + lowerWickVol * 0.8 + upperWickVol * 0.2
+            sellVolume := v - buyVolume
+        else
+            // Bearish candle
+            sellVolume := bodyVol * 1.2 + upperWickVol * 0.8 + lowerWickVol * 0.2
+            buyVolume := v - sellVolume
+        
+        // Ensure non-negative
+        buyVolume := math.max(0, buyVolume)
+        sellVolume := math.max(0, sellVolume)
+        
+        delta = buyVolume - sellVolume
+        
+        // Calculate POC for this candle
+        poc = f_calculatePOC(o, h, l, c, v)
+        
+        [buyVolume, sellVolume, delta, poc]
+
+// Check if current timeframe is suitable for LTF analysis
+f_shouldUseLTF() =>
+    currentTFSeconds = timeframe.in_seconds(timeframe.period)
+    currentTFMinutes = currentTFSeconds / 60
+    
+    // Don't use LTF for sub-1-minute timeframes (use realtime tick method instead)
+    if currentTFSeconds < 60
+        false
+    else
+        minTFMinutes = minTimeframeForLTF == "1" ? 1 :
+                       minTimeframeForLTF == "5" ? 5 :
+                       minTimeframeForLTF == "15" ? 15 :
+                       minTimeframeForLTF == "30" ? 30 : 60
+        
+        useLTFData and currentTFMinutes >= minTFMinutes
+
+// Get timeframe-specific multipliers based on current chart timeframe (for EMA/STDEV)
+f_getTimeframeMultipliers() =>
+    currentTFSeconds = timeframe.in_seconds(timeframe.period)
+    currentTFMinutes = currentTFSeconds / 60
+    
+    smallMult = 3.0
+    medMult = 5.0
+    largeMult = 8.0
+    
+    // Match to closest timeframe
+    if currentTFMinutes <= 1
+        smallMult := tf1m_small
+        medMult := tf1m_med
+        largeMult := tf1m_large
+    else if currentTFMinutes <= 5
+        smallMult := tf5m_small
+        medMult := tf5m_med
+        largeMult := tf5m_large
+    else if currentTFMinutes <= 15
+        smallMult := tf15m_small
+        medMult := tf15m_med
+        largeMult := tf15m_large
+    else if currentTFMinutes <= 30
+        smallMult := tf30m_small
+        medMult := tf30m_med
+        largeMult := tf30m_large
+    else if currentTFMinutes <= 60
+        smallMult := tf1h_small
+        medMult := tf1h_med
+        largeMult := tf1h_large
+    else if currentTFMinutes <= 120
+        smallMult := tf2h_small
+        medMult := tf2h_med
+        largeMult := tf2h_large
+    else
+        smallMult := tf4h_small
+        medMult := tf4h_med
+        largeMult := tf4h_large
+    
+    [smallMult, medMult, largeMult]
+
+// Get timeframe-specific volume thresholds (for Fixed Volume method)
+f_getTimeframeVolumes() =>
+    currentTFSeconds = timeframe.in_seconds(timeframe.period)
+    currentTFMinutes = currentTFSeconds / 60
+    
+    smallVol = 3
+    medVol = 5
+    largeVol = 8
+    
+    // Match to closest timeframe
+    if currentTFMinutes <= 1
+        smallVol := tf1m_vol_s
+        medVol := tf1m_vol_m
+        largeVol := tf1m_vol_l
+    else if currentTFMinutes <= 5
+        smallVol := tf5m_vol_s
+        medVol := tf5m_vol_m
+        largeVol := tf5m_vol_l
+    else if currentTFMinutes <= 15
+        smallVol := tf15m_vol_s
+        medVol := tf15m_vol_m
+        largeVol := tf15m_vol_l
+    else if currentTFMinutes <= 30
+        smallVol := tf30m_vol_s
+        medVol := tf30m_vol_m
+        largeVol := tf30m_vol_l
+    else if currentTFMinutes <= 60
+        smallVol := tf1h_vol_s
+        medVol := tf1h_vol_m
+        largeVol := tf1h_vol_l
+    else if currentTFMinutes <= 120
+        smallVol := tf2h_vol_s
+        medVol := tf2h_vol_m
+        largeVol := tf2h_vol_l
+    else
+        smallVol := tf4h_vol_s
+        medVol := tf4h_vol_m
+        largeVol := tf4h_vol_l
+    
+    [smallVol, medVol, largeVol]
+
+// ============================================================================
+// LTF DATA COLLECTION
+// ============================================================================
+
+// Arrays to store LTF data for the current HTF bar
+var array<float> ltfBuyVolumes = array.new<float>()
+var array<float> ltfSellVolumes = array.new<float>()
+var array<float> ltfDeltas = array.new<float>()
+var array<float> ltfPrices = array.new<float>()
+var array<float> ltfPOCs = array.new<float>()
+var array<int> ltfTimes = array.new<int>()
+var array<float> ltfHighs = array.new<float>()
+var array<float> ltfLows = array.new<float>()
+var array<float> ltfVWAPs = array.new<float>()
+
+// Dashboard statistics tracking
+var array<int> bubbleCountSmall = array.new<int>()
+var array<int> bubbleCountMedium = array.new<int>()
+var array<int> bubbleCountLarge = array.new<int>()
+var array<float> barBuyPressure = array.new<float>()
+var array<float> barSellPressure = array.new<float>()
+
+// Get LTF data using request.security_lower_tf
+shouldUseLTF = f_shouldUseLTF()
+ltfTimeframe = f_getLowerTimeframe()
+
+if shouldUseLTF
+    // Request LTF data
+    [ltfOpens, ltfHighsRaw, ltfLowsRaw, ltfCloses, ltfVolumes, ltfTimesRaw] = 
+         request.security_lower_tf(syminfo.tickerid, ltfTimeframe, 
+         [open, high, low, close, volume, time])
+    
+    // Clear arrays for new HTF bar
+    if barstate.isfirst or array.size(ltfOpens) > 0
+        array.clear(ltfBuyVolumes)
+        array.clear(ltfSellVolumes)
+        array.clear(ltfDeltas)
+        array.clear(ltfPrices)
+        array.clear(ltfPOCs)
+        array.clear(ltfTimes)
+        array.clear(ltfHighs)
+        array.clear(ltfLows)
+        array.clear(ltfVWAPs)
+        
+        // Process each LTF candle
+        if array.size(ltfOpens) > 0
+            for i = 0 to array.size(ltfOpens) - 1
+                ltfO = array.get(ltfOpens, i)
+                ltfH = array.get(ltfHighsRaw, i)
+                ltfL = array.get(ltfLowsRaw, i)
+                ltfC = array.get(ltfCloses, i)
+                ltfV = array.get(ltfVolumes, i)
+                ltfT = array.get(ltfTimesRaw, i)
+                
+                // Calculate volume delta and POC for this LTF candle
+                [buyVol, sellVol, delta, poc] = f_singleCandleVolumeDelta(ltfO, ltfH, ltfL, ltfC, ltfV)
+                vwap = f_calculateVWAP(ltfO, ltfH, ltfL, ltfC, ltfV)
+                
+                // Store data
+                array.push(ltfBuyVolumes, buyVol)
+                array.push(ltfSellVolumes, sellVol)
+                array.push(ltfDeltas, delta)
+                array.push(ltfPrices, ltfC)
+                array.push(ltfPOCs, poc)
+                array.push(ltfTimes, ltfT)
+                array.push(ltfHighs, ltfH)
+                array.push(ltfLows, ltfL)
+                array.push(ltfVWAPs, vwap)
+
+// ============================================================================
+// THRESHOLD CALCULATION
+// ============================================================================
+
+// Calculate thresholds based on selected method
+var float smallBuyThreshold = 0.0
+var float mediumBuyThreshold = 0.0
+var float largeBuyThreshold = 0.0
+var float smallSellThreshold = 0.0
+var float mediumSellThreshold = 0.0
+var float largeSellThreshold = 0.0
+
+if thresholdMethod == "Fixed Volume"
+    // Use timeframe-specific fixed volume thresholds
+    [smallVol, medVol, largeVol] = f_getTimeframeVolumes()
+    smallBuyThreshold := smallVol
+    mediumBuyThreshold := medVol
+    largeBuyThreshold := largeVol
+    smallSellThreshold := smallVol
+    mediumSellThreshold := medVol
+    largeSellThreshold := largeVol
+else
+    // Use EMA/STDEV with timeframe-specific multipliers
+    [smallMultiplier, mediumMultiplier, largeMultiplier] = f_getTimeframeMultipliers()
+    
+    // Calculate average volume delta for threshold
+    avgAbsDelta = 0.0
+    
+    if shouldUseLTF and array.size(ltfDeltas) > 0
+        sumAbsDelta = 0.0
+        for i = 0 to array.size(ltfDeltas) - 1
+            sumAbsDelta += math.abs(array.get(ltfDeltas, i))
+        avgAbsDelta := sumAbsDelta / array.size(ltfDeltas)
+    else
+        // Fallback to HTF calculation
+        barRange = high - low
+        if barRange > 0
+            closePosition = (close - low) / barRange
+            buyVol = volume * closePosition
+            sellVol = volume * (1 - closePosition)
+            avgAbsDelta := math.abs(buyVol - sellVol)
+    
+    // Use series for EMA calculation
+    var float deltaSeriesForEMA = 0.0
+    deltaSeriesForEMA := avgAbsDelta
+    
+    emaVolumeDelta = ta.ema(deltaSeriesForEMA, thresholdEmaLength)
+    stdevVolumeDelta = ta.stdev(deltaSeriesForEMA, thresholdStdevLength)
+    
+    baseThreshold = emaVolumeDelta + stdevVolumeDelta
+    
+    // Apply timeframe-specific multipliers (same for buy and sell)
+    smallBuyThreshold := baseThreshold * smallMultiplier
+    mediumBuyThreshold := baseThreshold * mediumMultiplier
+    largeBuyThreshold := baseThreshold * largeMultiplier
+    smallSellThreshold := baseThreshold * smallMultiplier
+    mediumSellThreshold := baseThreshold * mediumMultiplier
+    largeSellThreshold := baseThreshold * largeMultiplier
+
+// Average volume for filtering
+avgVolume = ta.sma(volume, 20)
+avgLTFVolume = avgVolume / math.max(1, array.size(ltfDeltas))
+
+// ============================================================================
+// BUBBLE DETECTION AND DISPLAY
+// ============================================================================
+
+// Function to get bubble size
+f_getBubbleSize(absDelta, isBuy) =>
+    threshold1 = isBuy ? smallBuyThreshold : smallSellThreshold
+    threshold2 = isBuy ? mediumBuyThreshold : mediumSellThreshold
+    threshold3 = isBuy ? largeBuyThreshold : largeSellThreshold
+    
+    result = "None"
+    if absDelta >= threshold3
+        result := "Large"
+    else if absDelta >= threshold2
+        result := "Medium"
+    else if absDelta >= threshold1
+        result := "Small"
+    result
+
+// Function to check if bubble should be shown based on toggles
+f_shouldShowBubble(bubbleSize) =>
+    result = false
+    if bubbleSize == "Large" and showLargeBubbles
+        result := true
+    else if bubbleSize == "Medium" and showMediumBubbles
+        result := true
+    else if bubbleSize == "Small" and showSmallBubbles
+        result := true
+    result
+
+// Function to get actual size constant from string
+f_getSizeConstant(sizeString) =>
+    result = size.normal
+    if sizeString == "Tiny"
+        result := size.tiny
+    else if sizeString == "Small"
+        result := size.small
+    else if sizeString == "Normal"
+        result := size.normal
+    else if sizeString == "Large"
+        result := size.large
+    else
+        result := size.huge
+    result
+
+// Function to get bubble size based on level
+f_getBubbleSizeConstant(bubbleSize) =>
+    result = size.normal
+    if bubbleSize == "Large"
+        result := f_getSizeConstant(largeBubbleSize)
+    else if bubbleSize == "Medium"
+        result := f_getSizeConstant(mediumBubbleSize)
+    else
+        result := f_getSizeConstant(smallBubbleSize)
+    result
+
+// Function to get transparency based on strength
+f_getTransparency(absDelta, threshold) =>
+    if not useGradient
+        20
+    else
+        ratio = math.min(absDelta / (threshold * 3), 1.0)
+        transparency = int(70 - (ratio * 50))
+        transparency
+
+// Process LTF bubbles
+if shouldUseLTF and array.size(ltfDeltas) > 0 and barstate.isconfirmed
+    
+    // Initialize counters for this bar
+    var int currentBarSmall = 0
+    var int currentBarMedium = 0
+    var int currentBarLarge = 0
+    var float currentBarBuy = 0.0
+    var float currentBarSell = 0.0
+    
+    currentBarSmall := 0
+    currentBarMedium := 0
+    currentBarLarge := 0
+    currentBarBuy := 0.0
+    currentBarSell := 0.0
+    
+    // Find significant LTF candles
+    for i = 0 to array.size(ltfDeltas) - 1
+        ltfDelta = array.get(ltfDeltas, i)
+        absDelta = math.abs(ltfDelta)
+        ltfVol = array.get(ltfBuyVolumes, i) + array.get(ltfSellVolumes, i)
+        
+        // Filter by minimum volume
+        volumePct = (ltfVol / avgLTFVolume) * 100
+        if volumePct < minVolumePct
+            continue
+        
+        isBuy = ltfDelta > 0
+        bubbleSize = f_getBubbleSize(absDelta, isBuy)
+        
+        // Track bubble statistics
+        if bubbleSize == "Small"
+            currentBarSmall += 1
+        else if bubbleSize == "Medium"
+            currentBarMedium += 1
+        else if bubbleSize == "Large"
+            currentBarLarge += 1
+        
+        // Track buy/sell pressure
+        if isBuy
+            currentBarBuy += absDelta
+        else
+            currentBarSell += absDelta
+        
+        if bubbleSize != "None" and f_shouldShowBubble(bubbleSize)
+            // Calculate position within HTF bar
+            ltfCount = array.size(ltfDeltas)
+            barFraction = i / math.max(1, ltfCount - 1)
+            
+            // Determine Y position based on selected method
+            yPos = 0.0
+            if bubblePosition == "LTF POC"
+                // Use Point of Control - where most volume occurred
+                yPos := array.get(ltfPOCs, i)
+            else if bubblePosition == "LTF Close"
+                // Use LTF candle close price
+                yPos := array.get(ltfPrices, i)
+            else if bubblePosition == "LTF VWAP"
+                // Use volume-weighted average price
+                yPos := array.get(ltfVWAPs, i)
+            else // High/Low (Legacy)
+                yPos := isBuy ? array.get(ltfHighs, i) : array.get(ltfLows, i)
+            
+            // Determine X position (time within bar)
+            xPos = bar_index + barFraction
+            
+            // Get color and transparency
+            bubbleColor = isBuy ? buyColor : sellColor
+            transparency = f_getTransparency(absDelta, isBuy ? smallBuyThreshold : smallSellThreshold)
+            
+            // Determine text size based on bubble level
+            textSize = f_getBubbleSizeConstant(bubbleSize)
+            
+            // Create label text - just the bubble character or with delta
+            labelText = showDeltaValue ? str.tostring(int(absDelta)) : ""
+            bubbleChar = "●"
+            
+            // Create tooltip if enabled
+            tooltipText = ""
+            if showBubbleTooltip
+                ltfPrice = array.get(ltfPrices, i)
+                tooltipText := str.format("{0} {1}\nDelta: {2}\nVol: {3}\nPrice: {4}\nPOC: {5}", 
+                     bubbleSize, isBuy ? "Buy" : "Sell", 
+                     str.tostring(int(absDelta)), 
+                     str.tostring(int(ltfVol)),
+                     str.tostring(ltfPrice, format.mintick),
+                     str.tostring(yPos, format.mintick))
+            
+            // Create bubble AT the price level (not above/below)
+            label.new(
+                 x=xPos, 
+                 y=yPos, 
+                 text=bubbleChar, 
+                 style=label.style_circle,
+                 color=color.new(bubbleColor, transparency),
+                 textcolor=color.new(bubbleColor, transparency),
+                 size=textSize,
+                 tooltip=tooltipText
+             )
+            
+            // Optionally show delta value as separate small label next to bubble
+            if showDeltaValue
+                label.new(
+                     x=xPos, 
+                     y=yPos, 
+                     text=labelText,
+                     style=label.style_none,
+                     color=color.new(color.white, 100),
+                     textcolor=color.new(bubbleColor, 0),
+                     size=size.tiny,
+                     tooltip=tooltipText
+                 )
+    
+    // Show LTF candle markers if enabled
+    if showLTFCandles
+        for i = 0 to array.size(ltfPrices) - 1
+            ltfCount = array.size(ltfPrices)
+            barFraction = i / math.max(1, ltfCount - 1)
+            xPos = bar_index + barFraction
+            yPos = array.get(ltfPrices, i)
+            
+            label.new(x=xPos, y=yPos, text="·", style=label.style_none,
+                 color=ltfMarkerColor, textcolor=ltfMarkerColor, size=size.tiny)
+    
+    // Store statistics for dashboard
+    array.push(bubbleCountSmall, currentBarSmall)
+    array.push(bubbleCountMedium, currentBarMedium)
+    array.push(bubbleCountLarge, currentBarLarge)
+    array.push(barBuyPressure, currentBarBuy)
+    array.push(barSellPressure, currentBarSell)
+    
+    // Keep array size manageable
+    if array.size(bubbleCountSmall) > lookbackBars
+        array.shift(bubbleCountSmall)
+        array.shift(bubbleCountMedium)
+        array.shift(bubbleCountLarge)
+        array.shift(barBuyPressure)
+        array.shift(barSellPressure)
+
+// Fallback: Use HTF estimation if not using LTF
+else
+    [buyVol, sellVol, delta, poc] = f_singleCandleVolumeDelta(open, high, low, close, volume)
+    absDelta = math.abs(delta)
+    
+    isBuy = delta > 0
+    bubbleSize = f_getBubbleSize(absDelta, isBuy)
+    
+    // Track statistics for HTF mode
+    if bubbleSize != "None" and barstate.isconfirmed
+        // Initialize counters
+        var int htfSmall = 0
+        var int htfMedium = 0
+        var int htfLarge = 0
+        var float htfBuy = 0.0
+        var float htfSell = 0.0
+        
+        htfSmall := bubbleSize == "Small" ? 1 : 0
+        htfMedium := bubbleSize == "Medium" ? 1 : 0
+        htfLarge := bubbleSize == "Large" ? 1 : 0
+        htfBuy := isBuy ? absDelta : 0.0
+        htfSell := isBuy ? 0.0 : absDelta
+        
+        // Store statistics
+        array.push(bubbleCountSmall, htfSmall)
+        array.push(bubbleCountMedium, htfMedium)
+        array.push(bubbleCountLarge, htfLarge)
+        array.push(barBuyPressure, htfBuy)
+        array.push(barSellPressure, htfSell)
+        
+        // Keep array size manageable
+        if array.size(bubbleCountSmall) > lookbackBars
+            array.shift(bubbleCountSmall)
+            array.shift(bubbleCountMedium)
+            array.shift(bubbleCountLarge)
+            array.shift(barBuyPressure)
+            array.shift(barSellPressure)
+    
+    if bubbleSize != "None" and f_shouldShowBubble(bubbleSize) and barstate.isconfirmed
+        // Use POC for Y position
+        yPos = poc
+        bubbleColor = isBuy ? buyColor : sellColor
+        transparency = f_getTransparency(absDelta, isBuy ? smallBuyThreshold : smallSellThreshold)
+        
+        textSize = f_getBubbleSizeConstant(bubbleSize)
+        
+        tooltipText = showBubbleTooltip ? 
+             str.format("{0} {1} (HTF)\nDelta: {2}\nPOC: {3}", 
+                  bubbleSize, isBuy ? "Buy" : "Sell", 
+                  str.tostring(int(absDelta)),
+                  str.tostring(yPos, format.mintick)) : ""
+        
+        label.new(
+             x=bar_index, 
+             y=yPos, 
+             text="●", 
+             style=label.style_circle,
+             color=color.new(bubbleColor, transparency),
+             textcolor=color.new(bubbleColor, transparency),
+             size=textSize,
+             tooltip=tooltipText
+         )
+        
+        if showDeltaValue
+            label.new(
+                 x=bar_index, 
+                 y=yPos, 
+                 text=str.tostring(int(absDelta)),
+                 style=label.style_none,
+                 color=color.new(color.white, 100),
+                 textcolor=color.new(bubbleColor, 0),
+                 size=size.tiny,
+                 tooltip=tooltipText
+             )
+
+// ============================================================================
+// REALTIME METHOD FOR SUB-1-MINUTE TIMEFRAMES (15s, 30s, etc.)
+// ============================================================================
+
+// Use tick-based approach on sub-1-minute charts
+var bool useRealtimeMethod = not shouldUseLTF and timeframe.in_seconds(timeframe.period) < 60
+
+if useRealtimeMethod and barstate.isrealtime
+    // Use the real-time volume split method from your existing script
+    varip float prevClose = open
+    varip float prevVolume = 0.
+    varip float newVolume = 0.
+    varip float volUp = 0.
+    varip float volDn = 0.
+    varip int prevPolarity = 0
+
+    if barstate.isnew
+        volUp := 0.
+        volDn := 0.
+        prevClose := nz(close[1])
+        prevVolume := 0.
+        prevPolarity := nz(prevPolarity[1])
+
+    newVolume := volume - prevVolume
+
+    if close > prevClose
+        prevPolarity := 1
+        volUp := volUp + newVolume
+    else if close < prevClose
+        prevPolarity := -1
+        volDn := volDn + newVolume
+
+    prevClose := close
+    prevVolume := volume
+    
+    deltaVol = volUp - volDn
+    absDeltaRT = math.abs(deltaVol)
+    
+    isBuyRT = deltaVol > 0
+    bubbleSizeRT = f_getBubbleSize(absDeltaRT, isBuyRT)
+    
+    // Track statistics for realtime mode (only on confirmed bars to avoid duplicates)
+    if bubbleSizeRT != "None" and barstate.isconfirmed
+        rtSmall = bubbleSizeRT == "Small" ? 1 : 0
+        rtMedium = bubbleSizeRT == "Medium" ? 1 : 0
+        rtLarge = bubbleSizeRT == "Large" ? 1 : 0
+        rtBuy = isBuyRT ? absDeltaRT : 0.0
+        rtSell = isBuyRT ? 0.0 : absDeltaRT
+        
+        array.push(bubbleCountSmall, rtSmall)
+        array.push(bubbleCountMedium, rtMedium)
+        array.push(bubbleCountLarge, rtLarge)
+        array.push(barBuyPressure, rtBuy)
+        array.push(barSellPressure, rtSell)
+        
+        if array.size(bubbleCountSmall) > lookbackBars
+            array.shift(bubbleCountSmall)
+            array.shift(bubbleCountMedium)
+            array.shift(bubbleCountLarge)
+            array.shift(barBuyPressure)
+            array.shift(barSellPressure)
+    
+    if bubbleSizeRT != "None" and f_shouldShowBubble(bubbleSizeRT)
+        // Calculate POC for realtime candle
+        pocRT = f_calculatePOC(open, high, low, close, volume)
+        yPosRT = pocRT
+        
+        bubbleColorRT = isBuyRT ? buyColor : sellColor
+        transparencyRT = f_getTransparency(absDeltaRT, isBuyRT ? smallBuyThreshold : smallSellThreshold)
+        
+        textSizeRT = f_getBubbleSizeConstant(bubbleSizeRT)
+        
+        tooltipTextRT = showBubbleTooltip ? 
+             str.format("{0} {1} (Realtime)\nDelta: {2}\nPOC: {3}", 
+                  bubbleSizeRT, isBuyRT ? "Buy" : "Sell", 
+                  str.tostring(int(absDeltaRT)),
+                  str.tostring(yPosRT, format.mintick)) : ""
+        
+        label.new(
+             x=bar_index, 
+             y=yPosRT, 
+             text="●", 
+             style=label.style_circle,
+             color=color.new(bubbleColorRT, transparencyRT),
+             textcolor=color.new(bubbleColorRT, transparencyRT),
+             size=textSizeRT,
+             tooltip=tooltipTextRT
+         )
+        
+        if showDeltaValue
+            label.new(
+                 x=bar_index, 
+                 y=yPosRT, 
+                 text=str.tostring(int(absDeltaRT)),
+                 style=label.style_none,
+                 color=color.new(color.white, 100),
+                 textcolor=color.new(bubbleColorRT, 0),
+                 size=size.tiny,
+                 tooltip=tooltipTextRT
+             )
+
+// ============================================================================
+// DASHBOARD
+// ============================================================================
+
+// Calculate dashboard statistics
+f_calcTotalFromArray(arr) =>
+    total = 0.0
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            total += array.get(arr, i)
+    total
+
+// Get text size constant
+f_getDashboardTextSize() =>
+    result = size.normal
+    if dashboardSize == "tiny"
+        result := size.tiny
+    else if dashboardSize == "small"
+        result := size.small
+    else if dashboardSize == "large"
+        result := size.large
+    result
+
+// Dashboard table
+dashPosition = dashboardYpos + "_" + dashboardXpos
+var table dashTable = table.new(dashPosition, 2, showDebugInfo ? 9 : 6, 
+     bgcolor=color.new(color.black, 85), 
+     frame_width=1, 
+     frame_color=color.new(color.gray, 50),
+     border_width=1, 
+     border_color=color.new(color.gray, 70))
+
+if barstate.islast and showDashboard
+    textSize = f_getDashboardTextSize()
+    
+    // Calculate statistics
+    totalSmall = f_calcTotalFromArray(bubbleCountSmall)
+    totalMedium = f_calcTotalFromArray(bubbleCountMedium)
+    totalLarge = f_calcTotalFromArray(bubbleCountLarge)
+    totalBuy = f_calcTotalFromArray(barBuyPressure)
+    totalSell = f_calcTotalFromArray(barSellPressure)
+    
+    netPressure = totalBuy - totalSell
+    pressureRatio = totalSell > 0 ? totalBuy / totalSell : 0
+    
+    // Determine order flow bias
+    flowBias = netPressure > 0 ? "BULLISH" : netPressure < 0 ? "BEARISH" : "NEUTRAL"
+    flowColor = netPressure > 0 ? color.new(color.green, 0) : netPressure < 0 ? color.new(color.red, 0) : color.new(color.gray, 0)
+    
+    // Header
+    table.cell(dashTable, 0, 0, "ORDER FLOW", text_color=color.new(color.white, 0), 
+         text_size=textSize, bgcolor=color.new(color.blue, 70))
+    table.cell(dashTable, 1, 0, "(" + str.tostring(lookbackBars) + " bars)", 
+         text_color=color.new(color.gray, 0), text_size=textSize, 
+         bgcolor=color.new(color.blue, 70))
+    
+    // Order Flow Bias
+    table.cell(dashTable, 0, 1, "Flow Bias:", text_color=color.new(color.white, 20), text_size=textSize)
+    table.cell(dashTable, 1, 1, flowBias, text_color=flowColor, text_size=textSize)
+    
+    // Buy Pressure
+    table.cell(dashTable, 0, 2, "Buy Pressure:", text_color=color.new(color.white, 20), text_size=textSize)
+    table.cell(dashTable, 1, 2, str.tostring(math.round(totalBuy)), 
+         text_color=color.new(color.green, 0), text_size=textSize)
+    
+    // Sell Pressure
+    table.cell(dashTable, 0, 3, "Sell Pressure:", text_color=color.new(color.white, 20), text_size=textSize)
+    table.cell(dashTable, 1, 3, str.tostring(math.round(totalSell)), 
+         text_color=color.new(color.red, 0), text_size=textSize)
+    
+    // Bubble Counts
+    table.cell(dashTable, 0, 4, "S/M/L Bubbles:", text_color=color.new(color.white, 20), text_size=textSize)
+    table.cell(dashTable, 1, 4, str.tostring(totalSmall) + "/" + str.tostring(totalMedium) + "/" + str.tostring(totalLarge), 
+         text_color=color.new(color.yellow, 0), text_size=textSize)
+    
+    // Ratio
+    table.cell(dashTable, 0, 5, "Buy/Sell Ratio:", text_color=color.new(color.white, 20), text_size=textSize)
+    ratioColor = pressureRatio > 1 ? color.new(color.green, 0) : pressureRatio < 1 ? color.new(color.red, 0) : color.new(color.gray, 0)
+    table.cell(dashTable, 1, 5, str.tostring(pressureRatio, format.mintick) + ":1", 
+         text_color=ratioColor, text_size=textSize)
+    
+    // Debug Info (optional)
+    if showDebugInfo
+        table.cell(dashTable, 0, 6, "Mode:", text_color=color.new(color.gray, 30), text_size=size.tiny)
+        modeText = shouldUseLTF ? "LTF" : useRealtimeMethod ? "Realtime" : "HTF"
+        modeColor = shouldUseLTF ? color.yellow : useRealtimeMethod ? color.lime : color.orange
+        table.cell(dashTable, 1, 6, modeText, text_color=color.new(modeColor, 0), text_size=size.tiny)
+        
+        table.cell(dashTable, 0, 7, "Timeframes:", text_color=color.new(color.gray, 30), text_size=size.tiny)
+        tfText = shouldUseLTF ? timeframe.period + "/" + ltfTimeframe : timeframe.period
+        table.cell(dashTable, 1, 7, tfText, text_color=color.new(color.white, 30), text_size=size.tiny)
+        
+        table.cell(dashTable, 0, 8, "Threshold:", text_color=color.new(color.gray, 30), text_size=size.tiny)
+        threshText = thresholdMethod + " | S:" + str.tostring(int(smallBuyThreshold)) + " M:" + str.tostring(int(mediumBuyThreshold)) + " L:" + str.tostring(int(largeBuyThreshold))
+        table.cell(dashTable, 1, 8, threshText, text_color=color.new(color.aqua, 30), text_size=size.tiny)
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+
+// Alerts will trigger based on LTF analysis
+alertcondition(shouldUseLTF and array.size(ltfDeltas) > 0, "LTF Large Order Detected", 
+     "Large market order detected in lower timeframe analysis!")
+

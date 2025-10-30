@@ -1,0 +1,313 @@
+//@version=6
+indicator("Market Order Bubbles - Enhanced", shorttitle="MOB Enhanced", overlay=true, max_bubbles_count=500)
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+
+// Bubble Display Settings
+bubblePosition = input.string("Above/Below Candle", "Bubble Position", 
+     options=["Above/Below Candle", "High/Low", "Wick Extremes"])
+useGradient = input.bool(true, "Strength Gradient Color", 
+     tooltip="Adjusts bubble transparency based on volume strength")
+showDeltaValue = input.bool(true, "Show Delta Values")
+showPOC = input.bool(false, "Show Intrabar POC")
+
+// Threshold Calculation Settings
+thresholdEmaLength = input.int(20, "Threshold EMA Length", minval=1, maxval=200,
+     tooltip="EMA length for calculating volume thresholds")
+thresholdStdevLength = input.int(20, "Threshold STDEV Length", minval=1, maxval=200,
+     tooltip="Standard deviation length for threshold calculation")
+
+// Bubble Size Multipliers
+smallBuyMultiplier = input.float(1.5, "Small Buy Bubble Multiplier", minval=0.1, maxval=10, step=0.1, group="Buy Thresholds")
+mediumBuyMultiplier = input.float(2.5, "Medium Buy Bubble Multiplier", minval=0.1, maxval=10, step=0.1, group="Buy Thresholds")
+largeBuyMultiplier = input.float(4.0, "Large Buy Bubble Multiplier", minval=0.1, maxval=10, step=0.1, group="Buy Thresholds")
+
+smallSellMultiplier = input.float(1.5, "Small Sell Bubble Multiplier", minval=0.1, maxval=10, step=0.1, group="Sell Thresholds")
+mediumSellMultiplier = input.float(2.5, "Medium Sell Bubble Multiplier", minval=0.1, maxval=10, step=0.1, group="Sell Thresholds")
+largeSellMultiplier = input.float(4.0, "Large Sell Bubble Multiplier", minval=0.1, maxval=10, step=0.1, group="Sell Thresholds")
+
+// Appearance
+appearanceDelay = input.int(0, "Appearance Delay (bars)", minval=0, maxval=50,
+     tooltip="Delay bubble appearance by X bars")
+
+// Colors
+buyColor = input.color(color.new(color.green, 30), "Buy Bubble Color", group="Colors")
+sellColor = input.color(color.new(color.red, 30), "Sell Bubble Color", group="Colors")
+
+// Timeframe-Adjusted Settings
+enableTFSettings = input.bool(false, "Enable Timeframe-Adjusted Settings", group="Timeframe Settings")
+tf1 = input.timeframe("15", "Timeframe 1", group="Timeframe Settings")
+tf1_ema = input.int(20, "TF1 EMA Length", group="Timeframe Settings")
+tf1_stdev = input.int(20, "TF1 STDEV Length", group="Timeframe Settings")
+
+// ============================================================================
+// FUNCTIONS
+// ============================================================================
+
+// Calculate Volume Delta (Buy Volume - Sell Volume)
+// This estimates buying vs selling pressure based on price position within the bar
+f_calculateVolumeDelta() =>
+    // Method: Use close position within the bar range to estimate buy/sell split
+    barRange = high - low
+    
+    // Avoid division by zero
+    if barRange == 0
+        [volume, 0.0]
+    else
+        // Close position ratio (0 to 1, where 1 = close at high, 0 = close at low)
+        closePosition = (close - low) / barRange
+        
+        // Estimate buy and sell volume based on close position
+        // If close is near high, more buying pressure
+        // If close is near low, more selling pressure
+        buyVolume = volume * closePosition
+        sellVolume = volume * (1 - closePosition)
+        
+        // Additional weight based on candle direction
+        if close > open
+            // Bullish candle - add more weight to buy volume
+            bodyRatio = (close - open) / barRange
+            buyVolume := buyVolume * (1 + bodyRatio * 0.5)
+            sellVolume := volume - buyVolume
+        else if close < open
+            // Bearish candle - add more weight to sell volume
+            bodyRatio = (open - close) / barRange
+            sellVolume := sellVolume * (1 + bodyRatio * 0.5)
+            buyVolume := volume - sellVolume
+        
+        [buyVolume, sellVolume]
+
+// Alternative method: Use intrabar data for more accuracy
+f_calculateVolumeDeltaAdvanced() =>
+    barRange = high - low
+    
+    if barRange == 0
+        [volume, 0.0]
+    else
+        // Analyze the wick sizes to estimate where volume occurred
+        upperWick = high - math.max(close, open)
+        lowerWick = math.min(close, open) - low
+        bodySize = math.abs(close - open)
+        
+        // Distribute volume based on price action
+        upperWickVol = volume * (upperWick / barRange)
+        lowerWickVol = volume * (lowerWick / barRange)
+        bodyVol = volume * (bodySize / barRange)
+        
+        // Bullish bar: body is buy volume, upper wick is sell pressure, lower wick is buy support
+        // Bearish bar: body is sell volume, lower wick is buy pressure, upper wick is sell pressure
+        buyVolume = close >= open ? 
+             bodyVol + lowerWickVol : 
+             lowerWickVol + upperWickVol * 0.3
+             
+        sellVolume = close < open ? 
+             bodyVol + upperWickVol : 
+             upperWickVol + lowerWickVol * 0.3
+        
+        [buyVolume, sellVolume]
+
+// Calculate POC (Point of Control) - estimated price with most volume
+f_calculatePOC() =>
+    // Simple approximation: volume-weighted average of OHLC
+    poc = (open + high + low + close * 2) / 5
+    poc
+
+// Get appropriate timeframe settings
+f_getTimeframeSettings() =>
+    currentTF = timeframe.period
+    emaLen = thresholdEmaLength
+    stdevLen = thresholdStdevLength
+    
+    if enableTFSettings and currentTF == tf1
+        emaLen := tf1_ema
+        stdevLen := tf1_stdev
+    
+    [emaLen, stdevLen]
+
+// ============================================================================
+// CALCULATIONS
+// ============================================================================
+
+// Get timeframe-adjusted settings
+[emaLength, stdevLength] = f_getTimeframeSettings()
+
+// Calculate volume delta using advanced method
+[buyVol, sellVol] = f_calculateVolumeDeltaAdvanced()
+volumeDelta = buyVol - sellVol
+absVolumeDelta = math.abs(volumeDelta)
+
+// Calculate thresholds using EMA and STDEV
+emaVolumeDelta = ta.ema(absVolumeDelta, emaLength)
+stdevVolumeDelta = ta.stdev(absVolumeDelta, stdevLength)
+
+// Calculate threshold levels
+baseThreshold = emaVolumeDelta + stdevVolumeDelta
+
+// Buy thresholds
+smallBuyThreshold = baseThreshold * smallBuyMultiplier
+mediumBuyThreshold = baseThreshold * mediumBuyMultiplier
+largeBuyThreshold = baseThreshold * largeBuyMultiplier
+
+// Sell thresholds
+smallSellThreshold = baseThreshold * smallSellMultiplier
+mediumSellThreshold = baseThreshold * mediumSellMultiplier
+largeSellThreshold = baseThreshold * largeSellMultiplier
+
+// Detect bubble conditions
+isBuyBubble = volumeDelta > 0 and absVolumeDelta > smallBuyThreshold
+isSellBubble = volumeDelta < 0 and absVolumeDelta > smallSellThreshold
+
+// Determine bubble size
+var string buyBubbleSize = na
+var string sellBubbleSize = na
+
+if isBuyBubble
+    if absVolumeDelta >= largeBuyThreshold
+        buyBubbleSize := "Large"
+    else if absVolumeDelta >= mediumBuyThreshold
+        buyBubbleSize := "Medium"
+    else
+        buyBubbleSize := "Small"
+else
+    buyBubbleSize := na
+
+if isSellBubble
+    if absVolumeDelta >= largeSellThreshold
+        sellBubbleSize := "Large"
+    else if absVolumeDelta >= mediumSellThreshold
+        sellBubbleSize := "Medium"
+    else
+        sellBubbleSize := "Small"
+else
+    sellBubbleSize := na
+
+// Calculate POC
+poc = f_calculatePOC()
+
+// ============================================================================
+// DISPLAY
+// ============================================================================
+
+// Determine bubble Y position
+getBubbleY(isBuy) =>
+    y = isBuy ? high : low
+    
+    if bubblePosition == "High/Low"
+        y := isBuy ? high : low
+    else if bubblePosition == "Above/Below Candle"
+        offset = (high - low) * 0.3
+        y := isBuy ? high + offset : low - offset
+    else if bubblePosition == "Wick Extremes"
+        y := isBuy ? high : low
+    
+    y
+
+// Get bubble size multiplier for display
+getBubbleSize(sizeStr) =>
+    sizeStr == "Large" ? 2.5 : sizeStr == "Medium" ? 1.5 : 1.0
+
+// Calculate gradient transparency
+getTransparency(volDelta, threshold) =>
+    if not useGradient
+        30
+    else
+        ratio = math.min(volDelta / (threshold * 3), 1.0)
+        transparency = int(80 - (ratio * 50))
+        transparency
+
+// Display Buy Bubbles with delay
+if bar_index >= appearanceDelay and not na(buyBubbleSize)
+    lookbackIndex = bar_index - appearanceDelay
+    bubbleY = getBubbleY(true)[appearanceDelay]
+    bubbleSize = getBubbleSize(buyBubbleSize)
+    transparency = getTransparency(absVolumeDelta[appearanceDelay], smallBuyThreshold)
+    
+    // Determine text size based on bubble size
+    textSize = buyBubbleSize == "Large" ? size.large : 
+               buyBubbleSize == "Medium" ? size.normal : size.small
+    
+    // Create label with bubble appearance
+    labelText = showDeltaValue ? str.format("{0}\n+{1}", buyBubbleSize, str.tostring(int(volumeDelta[appearanceDelay]))) : buyBubbleSize
+    
+    label.new(
+         x=lookbackIndex, 
+         y=bubbleY, 
+         text="●", 
+         style=label.style_none,
+         color=color.new(buyColor, transparency),
+         textcolor=color.new(buyColor, transparency),
+         size=textSize,
+         tooltip=labelText
+     )
+
+// Display Sell Bubbles with delay
+if bar_index >= appearanceDelay and not na(sellBubbleSize)
+    lookbackIndex = bar_index - appearanceDelay
+    bubbleY = getBubbleY(false)[appearanceDelay]
+    bubbleSize = getBubbleSize(sellBubbleSize)
+    transparency = getTransparency(absVolumeDelta[appearanceDelay], smallSellThreshold)
+    
+    // Determine text size based on bubble size
+    textSize = sellBubbleSize == "Large" ? size.large : 
+               sellBubbleSize == "Medium" ? size.normal : size.small
+    
+    // Create label with bubble appearance
+    labelText = showDeltaValue ? str.format("{0}\n-{1}", sellBubbleSize, str.tostring(int(math.abs(volumeDelta[appearanceDelay])))) : sellBubbleSize
+    
+    label.new(
+         x=lookbackIndex, 
+         y=bubbleY, 
+         text="●", 
+         style=label.style_none,
+         color=color.new(sellColor, transparency),
+         textcolor=color.new(sellColor, transparency),
+         size=textSize,
+         tooltip=labelText
+     )
+
+// Display POC markers
+if showPOC
+    line.new(x1=bar_index, y1=poc, x2=bar_index+1, y2=poc, 
+         color=color.gray, width=2, style=line.style_solid)
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+
+alertcondition(not na(buyBubbleSize) and buyBubbleSize == "Large", 
+     "Large Buy Bubble", "Large market buy orders detected!")
+alertcondition(not na(buyBubbleSize) and buyBubbleSize == "Medium", 
+     "Medium Buy Bubble", "Medium market buy orders detected!")
+alertcondition(not na(buyBubbleSize) and buyBubbleSize == "Small", 
+     "Small Buy Bubble", "Small market buy orders detected!")
+
+alertcondition(not na(sellBubbleSize) and sellBubbleSize == "Large", 
+     "Large Sell Bubble", "Large market sell orders detected!")
+alertcondition(not na(sellBubbleSize) and sellBubbleSize == "Medium", 
+     "Medium Sell Bubble", "Medium market sell orders detected!")
+alertcondition(not na(sellBubbleSize) and sellBubbleSize == "Small", 
+     "Small Sell Bubble", "Small market sell orders detected!")
+
+// ============================================================================
+// PLOTS FOR DEBUGGING (Optional - can be removed)
+// ============================================================================
+
+// Uncomment these to see the underlying data
+// plot(volumeDelta, "Volume Delta", color=color.new(color.blue, 70))
+// plot(baseThreshold, "Base Threshold", color=color.orange)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
