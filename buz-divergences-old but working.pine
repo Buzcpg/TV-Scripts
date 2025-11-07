@@ -4,25 +4,14 @@
 //v7 working nicely - added vol in - so far buy vol only seems to work ok but will be missing sell vol
 //v8 - added in macd length
 //v9 - added in Chaikin Osc
-//v15 - added pivot options
-//v18 - change minval of maxpp - (useless so reverted)
+//15 - added pivot options
+//18 - change minval of maxpp - (useless so reverted)
 //v20 adjusted macd back to default 12 26 - prd set to 5 each way (was messing with consistency of indicators)
 //v21 reset numbering
 //v22 - prd test in the len > prd - might shorten trade distances
 //v23 - default prd 2 and 2 by request
 //v24 - added must haves in - untested
 //v25 - must have tweaks
-//v26 - removed CCI, Momentum, VWmacd, MFI; replaced Buy/Sell Volume with CVD; improved divergence detection logic
-//v38 - fixed both must haves working together
-//v39 - fixed runtime error when must-have 2 is set (empty array access)
-//v40 - fixed pivot validation (clear air check) and line/label alignment offset issues [REVERTED - caused loop errors]
-//v41 - fixed all linter warnings: pivot functions called on each bar, explicit bool conversions [REVERTED - caused loop errors]
-//v42 - fixed ph/pl bool warnings and loop step error attempts [FAILED - still getting loop errors]
-//v43 - removed pivot clear air validation entirely to match working version and eliminate loop errors [REVERTED]
-//v44 - removed must-have 2 (rarely used, caused issues); fixed pivot function warnings properly
-//v45 - CRITICAL FIX: restored missing '+ prd' offset in divergence detection (lines weren't aligning to actual pivots)
-//v46 - Fixed pivot offset: changed '+ prd' to '+ prd1' (pivot detected prd1 bars after, not prd bars)
-//v47 - Fixed label offset: labels now use 'bar_index - startpoint' to match line x2 coordinate
 
 //@version=5
 indicator('CoffeePlz7759 Divergences', overlay=true, max_bars_back=1000, max_lines_count=400, max_labels_count=400)
@@ -40,32 +29,43 @@ dontconfirm = input(defval=true, title='Don\'t Wait for Confirmation')
 showlines = input(defval=true, title='Show Divergence Lines')
 showpivot = input(defval=false, title='Show Pivot Points')
 calcmacd = input(defval=true, title='MACD', group = "----  Coffee's Choices  ----")
-macdF = input(9, title="MACD Fast Length", group = "----  Coffee's Choices  ----", inline = "MACD")
+macdF = input(12, title="MACD Fast Length", group = "----  Coffee's Choices  ----", inline = "MACD")
 macdS = input(26, title="MACD Slow Length", group = "----  Coffee's Choices  ----", inline = "MACD")
 calcmacda = input(defval=false, title='MACD Histogram', group = "----  Coffee's Choices  ----")
-calccvd = input(defval=true, title='CVD (Cumulative Volume Delta)', group = "----  Coffee's Choices  ----")
+buySellVol = input(defval = true, title='Buy/Sell Volume', group = "----  Coffee's Choices  ----")
 calcobv = input(defval=true, title='OBV', group = "----  Coffee's Choices  ----")
 chaik = input(defval=true, title='Chaikin Oscillator', group = "----  Coffee's Choices  ----")
 chaikF = input(3, title="Chaikin Fast Length", group = "----  Coffee's Choices  ----", inline = "Chaikin")
 chaikS = input(10, title="Chaikin Slow Length", group = "----  Coffee's Choices  ----", inline = "Chaikin")
 calcrsi = input(defval=false, title='RSI', group = "----  Additional Indicators  ----")
 calcstoc = input(defval=false, title='Stochastic', group = "----  Additional Indicators  ----")
+calccci = input(defval=false, title='CCI', group = "----  Additional Indicators  ----")
+calcmom = input(defval=false, title='Momentum', group = "----  Additional Indicators  ----")
+calcvwmacd = input(false, title='VWmacd', group = "----  Additional Indicators  ----")
 calccmf = input(false, title='Chaikin Money Flow', group = "----  Additional Indicators  ----")
+calcmfi = input(false, title='Money Flow Index', group = "----  Additional Indicators  ----")
 calcext = input(false, title='Check External Indicator', group = "----  Additional Indicators  ----")
 externalindi = input(defval=close, title='External Indicator', group = "----  Additional Indicators  ----")
-// Input for mandatory divergence (removed must-have 2 - rarely used, caused issues)
-must_have_div1 = input.string(defval='None', title='Must-Have Divergence', options=['None', 'MACD', 'RSI', 'CVD', 'OBV', 'Chai'])
+// Input for mandatory divergences
+must_have_div1 = input.string(defval='None', title='Must-Have Divergence 1', options=['None', 'MACD', 'RSI', 'Buy/Sell Volume', 'OBV', 'Chai'])
+must_have_div2 = input.string(defval='None', title='Must-Have Divergence 2', options=['None', 'MACD', 'RSI', 'Buy/Sell Volume', 'OBV', 'Chai'])
 //
 pos_reg_div_col = input(defval=color.rgb(22, 70, 47), title='Positive Regular Divergence', group = "----  Lines  ----")
 neg_reg_div_col = input(defval=color.rgb(146, 21, 21), title='Negative Regular Divergence', group = "----  Lines  ----")
-pos_hid_div_col = input(defval=color.rgb(25, 241, 223), title='Positive Hidden Divergence', group = "----  Lines  ----")
-neg_hid_div_col = input(defval=color.rgb(248, 93, 209), title='Negative Hidden Divergence', group = "----  Lines  ----")
+pos_hid_div_col = input(defval=color.lime, title='Positive Hidden Divergence', group = "----  Lines  ----")
+neg_hid_div_col = input(defval=color.red, title='Negative Hidden Divergence', group = "----  Lines  ----")
 pos_div_text_col = input(defval=color.white, title='Positive Divergence Text Color', group = "----  Lines  ----")
 neg_div_text_col = input(defval=color.white, title='Negative Divergence Text Color', group = "----  Lines  ----")
 reg_div_l_style_ = input.string(defval='Solid', title='Regular Divergence Line Style', options=['Solid', 'Dashed', 'Dotted'], group = "----  Lines  ----")
-hid_div_l_style_ = input.string(defval='Dashed', title='Hidden Divergence Line Style', options=['Solid', 'Dashed', 'Dotted'], group = "----  Lines  ----")
+hid_div_l_style_ = input.string(defval='Dashed', title='Hdden Divergence Line Style', options=['Solid', 'Dashed', 'Dotted'], group = "----  Lines  ----")
 reg_div_l_width = input.int(defval=2, title='Regular Divergence Line Width', minval=1, maxval=5, group = "----  Lines  ----")
 hid_div_l_width = input.int(defval=1, title='Hidden Divergence Line Width', minval=1, maxval=5, group = "----  Lines  ----")
+//showmas = input.bool(defval=false, title='Show MAs 50 & 200', inline='ma12')
+//cma1col = input.color(defval=color.lime, title='', inline='ma12')
+//cma2col = input.color(defval=color.red, title='', inline='ma12')
+
+//plot(showmas ? ta.sma(close, 50) : na, color=showmas ? cma1col : na)
+//plot(showmas ? ta.sma(close, 200) : na, color=showmas ? cma2col : na)
 
 // set line styles
 var reg_div_l_style = reg_div_l_style_ == 'Solid' ? line.style_solid : reg_div_l_style_ == 'Dashed' ? line.style_dashed : line.style_dotted
@@ -74,21 +74,25 @@ var hid_div_l_style = hid_div_l_style_ == 'Solid' ? line.style_solid : hid_div_l
 // get indicators
 rsi = ta.rsi(close, 14)  // RSI
 [macd, signal, deltamacd] = ta.macd(close, macdF, macdS, 9)  // MACD
+moment = ta.mom(close, 10)  // Momentum
+cci = ta.cci(close, 10)  // CCI
 Obv = ta.obv  // OBV
 stk = ta.sma(ta.stoch(close, high, low, 14), 3)  // Stoch
+maFast = ta.vwma(close, 12)  // volume weighted macd
+maSlow = ta.vwma(close, 26)
+vwmacd = maFast - maSlow
 Cmfm = (close - low - (high - close)) / (high - low)  // Chaikin money flow
 Cmfv = Cmfm * volume
 cmf = ta.sma(Cmfv, 21) / ta.sma(volume, 21)
+Mfi = ta.mfi(close, 14)  // Moneyt Flow Index
 cosc = ta.ema(ta.accdist, chaikF) - ta.ema(ta.accdist, chaikS)
 
-// CVD (Cumulative Volume Delta) Calculation - from MTF EMA strategy
-// Approximates buying vs selling pressure using volume and price movement
-var float cvd = 0.0
-volume_delta = close > close[1] ? volume : close < close[1] ? -volume : 0
-cvd := cvd + volume_delta
+// Buy and Sell Volume Calculation
+buyVolume = high == low ? 0 : volume * (close - low) / (high - low)
+sellVolume = high == low ? 0 : volume * (high - close) / (high - low)
 
-// keep indicators names and colors in arrays (9 indicators now)
-var indicators_name = array.new_string(9)
+// keep indicators names and colors in arrays
+var indicators_name = array.new_string(13)
 var div_colors = array.new_color(4)
 if barstate.isfirst
     // names
@@ -96,11 +100,15 @@ if barstate.isfirst
     array.set(indicators_name, 1, showindis == 'Full' ? 'Hist' : 'H')
     array.set(indicators_name, 2, showindis == 'Full' ? 'RSI' : 'E')
     array.set(indicators_name, 3, showindis == 'Full' ? 'Stoch' : 'S')
-    array.set(indicators_name, 4, showindis == 'Full' ? 'OBV' : 'O')
-    array.set(indicators_name, 5, showindis == 'Full' ? 'CMF' : 'C')
-    array.set(indicators_name, 6, showindis == 'Full' ? 'Extrn' : 'X')
-    array.set(indicators_name, 7, showindis == 'Full' ? 'CVD' : 'CVD')
-    array.set(indicators_name, 8, showindis == 'Full' ? 'CHAI' : 'CH')
+    array.set(indicators_name, 4, showindis == 'Full' ? 'CCI' : 'C')
+    array.set(indicators_name, 5, showindis == 'Full' ? 'MOM' : 'M')
+    array.set(indicators_name, 6, showindis == 'Full' ? 'OBV' : 'O')
+    array.set(indicators_name, 7, showindis == 'Full' ? 'VWMACD' : 'V')
+    array.set(indicators_name, 8, showindis == 'Full' ? 'CMF' : 'C')
+    array.set(indicators_name, 9, showindis == 'Full' ? 'MFI' : 'M')
+    array.set(indicators_name, 10, showindis == 'Full' ? 'Extrn' : 'X')
+    array.set(indicators_name, 11, showindis == 'Full' ? 'VOL' : 'BS')
+    array.set(indicators_name, 12, showindis == 'Full' ? 'CHAI' : 'CH')
 
     //colors
     array.set(div_colors, 0, pos_reg_div_col)
@@ -108,11 +116,11 @@ if barstate.isfirst
     array.set(div_colors, 2, pos_hid_div_col)
     array.set(div_colors, 3, neg_hid_div_col)
 
-// Check if we get new Pivot High Or Pivot Low - call on every bar for consistency
-ph = ta.pivothigh(source == 'Close' ? close : high, prd, prd1)
-pl = ta.pivotlow(source == 'Close' ? close : low, prd, prd1)
-plotshape(not na(ph) and showpivot, text='H', style=shape.labeldown, color=color.new(color.white, 100), textcolor=color.new(color.red, 0), location=location.abovebar, offset=-prd1)
-plotshape(not na(pl) and showpivot, text='L', style=shape.labelup, color=color.new(color.white, 100), textcolor=color.new(color.lime, 0), location=location.belowbar, offset=-prd1)
+// Check if we get new Pivot High Or Pivot Low
+float ph = ta.pivothigh(source == 'Close' ? close : high, prd, prd1)
+float pl = ta.pivotlow(source == 'Close' ? close : low, prd, prd1)
+plotshape(ph and showpivot, text='H', style=shape.labeldown, color=color.new(color.white, 100), textcolor=color.new(color.red, 0), location=location.abovebar, offset=-prd1)
+plotshape(pl and showpivot, text='L', style=shape.labelup, color=color.new(color.white, 100), textcolor=color.new(color.lime, 0), location=location.belowbar, offset=-prd1)
 
 // keep values and positions of Pivot Highs/Lows in the arrays
 var int maxarraysize = 20
@@ -122,7 +130,7 @@ var ph_vals = array.new_float(maxarraysize, 0.)
 var pl_vals = array.new_float(maxarraysize, 0.)
 
 // add PHs to the array
-if not na(ph)
+if ph
     array.unshift(ph_positions, bar_index)
     array.unshift(ph_vals, ph)
     if array.size(ph_positions) > maxarraysize
@@ -130,25 +138,27 @@ if not na(ph)
         array.pop(ph_vals)
 
 // add PLs to the array
-if not na(pl)
+if pl
     array.unshift(pl_positions, bar_index)
     array.unshift(pl_vals, pl)
     if array.size(pl_positions) > maxarraysize
         array.pop(pl_positions)
         array.pop(pl_vals)
 
+// functions to check Regular Divergences and Hidden Divergences
+
 // function to check positive regular or negative hidden divergence
 // cond == 1 => positive_regular, cond == 2=> negative_hidden
 positive_regular_positive_hidden_divergence(src, cond) =>
     divlen = 0
     prsc = source == 'Close' ? close : low
-    // if indicators higher than last value and close price is higher than last close 
+    // if indicators higher than last value and close price is higher than las close 
     if dontconfirm or src > src[1] or close > close[1]
         startpoint = dontconfirm ? 0 : 1  // don't check last candle
-        // we search last maxpp pivot points
+        // we search last 15 PPs
         for x = 0 to maxpp - 1 by 1
-            len = bar_index - array.get(pl_positions, x) + prd1
-            // if we reach non valued array element or arrived maxbars or previous bars then we don't search more
+            len = bar_index - array.get(pl_positions, x) + prd
+            // if we reach non valued array element or arrived 101. or previous bars then we don't search more
             if array.get(pl_positions, x) == 0 or len > maxbars
                 break
             if len > prd1 and (cond == 1 and src[startpoint] > src[len] and prsc[startpoint] < nz(array.get(pl_vals, x)) or cond == 2 and src[startpoint] < src[len] and prsc[startpoint] > nz(array.get(pl_vals, x)))
@@ -175,13 +185,13 @@ positive_regular_positive_hidden_divergence(src, cond) =>
 negative_regular_negative_hidden_divergence(src, cond) =>
     divlen = 0
     prsc = source == 'Close' ? close : high
-    // if indicators lower than last value and close price is lower than last close 
+    // if indicators higher than last value and close price is higher than las close 
     if dontconfirm or src < src[1] or close < close[1]
         startpoint = dontconfirm ? 0 : 1  // don't check last candle
-        // we search last maxpp pivot points
+        // we search last 15 PPs
         for x = 0 to maxpp - 1 by 1
-            len = bar_index - array.get(ph_positions, x) + prd1
-            // if we reach non valued array element or arrived maxbars or previous bars then we don't search more
+            len = bar_index - array.get(ph_positions, x) + prd
+            // if we reach non valued array element or arrived 101. or previous bars then we don't search more
             if array.get(ph_positions, x) == 0 or len > maxbars
                 break
             if len > prd1 and (cond == 1 and src[startpoint] < src[len] and prsc[startpoint] > nz(array.get(ph_vals, x)) or cond == 2 and src[startpoint] > src[len] and prsc[startpoint] < nz(array.get(ph_vals, x)))
@@ -214,70 +224,79 @@ calculate_divs(cond, indicator_1) =>
 
 // Must have checks
 
-// Helper function to get indicator index from name
-get_indicator_index(indicator_name) =>
-    index = -1
-    if indicator_name == 'MACD'
-        index := 0
-    else if indicator_name == 'RSI'
-        index := 2
-    else if indicator_name == 'Stochastic'
-        index := 3
-    else if indicator_name == 'OBV'
-        index := 4
-    else if indicator_name == 'Chai'
-        index := 8
-    else if indicator_name == 'CVD'
-        index := 7
-    index
+// Check for mandatory divergences before plotting
+var bool mandatory_div1_present = true
+var bool mandatory_div2_present = true
 
-// array to keep all divergences (9 indicators * 4 divergence types = 36 elements)
-var all_divergences = array.new_int(36)
+// Check if the first mandatory divergence is present
+if must_have_div1 != 'None'
+    mandatory_div1_present := false  // Initially assume the divergence is not present
+    if must_have_div1 == 'MACD'
+        macd_divs = calculate_divs(calcmacd, macd)
+        mandatory_div1_present := array.get(macd_divs, 0) > 0 or array.get(macd_divs, 1) > 0 or array.get(macd_divs, 2) > 0 or array.get(macd_divs, 3) > 0
+
+    if must_have_div1 == 'RSI'
+        rsi_divs = calculate_divs(calcrsi, rsi)
+        mandatory_div1_present := array.get(rsi_divs, 0) > 0 or array.get(rsi_divs, 1) > 0 or array.get(rsi_divs, 2) > 0 or array.get(rsi_divs, 3) > 0
+
+    if must_have_div1 == 'Stochastic'
+        stoch_divs = calculate_divs(calcstoc, stk)
+        mandatory_div1_present := array.get(stoch_divs, 0) > 0 or array.get(stoch_divs, 1) > 0 or array.get(stoch_divs, 2) > 0 or array.get(stoch_divs, 3) > 0
+
+    if must_have_div1 == 'Obv'
+        Obv_divs = calculate_divs(calcobv, Obv)
+        mandatory_div1_present := array.get(Obv_divs, 0) > 0 or array.get(Obv_divs, 1) > 0 or array.get(Obv_divs, 2) > 0 or array.get(Obv_divs, 3) > 0
+
+    if must_have_div1 == 'Chai'
+        chai_divs = calculate_divs(chaik, cosc)
+        mandatory_div1_present := array.get(chai_divs, 0) > 0 or array.get(chai_divs, 1) > 0 or array.get(chai_divs, 2) > 0 or array.get(chai_divs, 3) > 0
+
+// Check if the second mandatory divergence is present
+if must_have_div2 != 'None'
+    mandatory_div2_present := false  // Initially assume the divergence is not present
+    if must_have_div2 == 'MACD'
+        macd_divs = calculate_divs(calcmacd, macd)
+        mandatory_div2_present := array.get(macd_divs, 0) > 0 or array.get(macd_divs, 1) > 0 or array.get(macd_divs, 2) > 0 or array.get(macd_divs, 3) > 0
+
+    if must_have_div2 == 'RSI'
+        rsi_divs = calculate_divs(calcrsi, rsi)
+        mandatory_div2_present := array.get(rsi_divs, 0) > 0 or array.get(rsi_divs, 1) > 0 or array.get(rsi_divs, 2) > 0 or array.get(rsi_divs, 3) > 0
+
+    if must_have_div2 == 'Stochastic'
+        stoch_divs = calculate_divs(calcstoc, stk)
+        mandatory_div2_present := array.get(stoch_divs, 0) > 0 or array.get(stoch_divs, 1) > 0 or array.get(stoch_divs, 2) > 0 or array.get(stoch_divs, 3) > 0
+
+    if must_have_div2 == 'Obv'
+        Obv_divs = calculate_divs(calcobv, Obv)
+        mandatory_div2_present := array.get(Obv_divs, 0) > 0 or array.get(Obv_divs, 1) > 0 or array.get(Obv_divs, 2) > 0 or array.get(Obv_divs, 3) > 0
+
+    if must_have_div2 == 'Chai'
+        chai_divs = calculate_divs(chaik, cosc)
+        mandatory_div2_present := array.get(chai_divs, 0) > 0 or array.get(chai_divs, 1) > 0 or array.get(chai_divs, 2) > 0 or array.get(chai_divs, 3) > 0
+
+// array to keep all divergences
+var all_divergences = array.new_int(52)  // 13 indicators * 4 divergence = 52 elements
 // set related array elements
 array_set_divs(div_pointer, index) =>
     for x = 0 to 3 by 1
         array.set(all_divergences, index * 4 + x, array.get(div_pointer, x))
 
-// Calculate all divergences first
-array_set_divs(calculate_divs(calcmacd, macd), 0)
-array_set_divs(calculate_divs(calcmacda, deltamacd), 1)
-array_set_divs(calculate_divs(calcrsi, rsi), 2)
-array_set_divs(calculate_divs(calcstoc, stk), 3)
-array_set_divs(calculate_divs(calcobv, Obv), 4)
-array_set_divs(calculate_divs(calccmf, cmf), 5)
-array_set_divs(calculate_divs(calcext, externalindi), 6)
-array_set_divs(calculate_divs(calccvd, cvd), 7)
-array_set_divs(calculate_divs(chaik, cosc), 8)
-
-// Filter divergences based on must-have requirement (must-have 2 removed)
-// Only show divergences where mandatory indicator also has divergences at the SAME pivot point
-var valid_distances = array.new_int(0)
-
-if must_have_div1 != 'None'
-    // Get mandatory indicator index
-    mandatory_idx1 = get_indicator_index(must_have_div1)
-    
-    // Clear array
-    array.clear(valid_distances)
-    
-    // Collect all distances where mandatory div has divergences
-    if mandatory_idx1 >= 0
-        for y = 0 to 3 by 1
-            dist = array.get(all_divergences, mandatory_idx1 * 4 + y)
-            if dist > 0 and not array.includes(valid_distances, dist)
-                array.push(valid_distances, dist)
-    
-    // Filter all_divergences: only keep divergences at valid distances
-    if array.size(valid_distances) > 0
-        for x = 0 to 8 by 1
-            for y = 0 to 3 by 1
-                dist = array.get(all_divergences, x * 4 + y)
-                if dist > 0 and not array.includes(valid_distances, dist)
-                    // Remove this divergence - it's not at a valid mandatory pivot point
-                    array.set(all_divergences, x * 4 + y, 0)
-    else
-        // No valid mandatory divergences found - clear everything
-        array.fill(all_divergences, 0)
+// If mandatory divergences are required and exist, proceed with plotting
+if mandatory_div1_present and mandatory_div2_present
+    // Plot other divergences only if the mandatory ones are present or not required
+    array_set_divs(calculate_divs(calcmacd, macd), 0)
+    array_set_divs(calculate_divs(calcmacda, deltamacd), 1)
+    array_set_divs(calculate_divs(calcrsi, rsi), 2)
+    array_set_divs(calculate_divs(calcstoc, stk), 3)
+    array_set_divs(calculate_divs(calccci, cci), 4)
+    array_set_divs(calculate_divs(calcmom, moment), 5)
+    array_set_divs(calculate_divs(calcobv, Obv), 6)
+    array_set_divs(calculate_divs(calcvwmacd, vwmacd), 7)
+    array_set_divs(calculate_divs(calccmf, cmf), 8)
+    array_set_divs(calculate_divs(calcmfi, Mfi), 9)
+    array_set_divs(calculate_divs(calcext, externalindi), 10)
+    array_set_divs(calculate_divs(buySellVol, buyVolume), 11)
+    array_set_divs(calculate_divs(chaik, cosc), 12)
 
 // check minimum number of divergence, if less than showlimit then delete all divergence
 total_div = 0
@@ -319,7 +338,7 @@ delete_old_neg_div_labels() =>
             label.delete(array.get(neg_div_labels, j))
         array.clear(neg_div_labels)
 
-// delete last created lines and labels until we met new PH/PL 
+// delete last created lines and labels until we met new PH/PV 
 delete_last_pos_div_lines_label(n) =>
     if n > 0 and array.size(pos_div_lines) >= n
         asz = array.size(pos_div_lines)
@@ -346,16 +365,16 @@ neg_reg_div_detected = false
 pos_hid_div_detected = false
 neg_hid_div_detected = false
 
-// to remove lines/labels until we met new PH/PL
+// to remove lines/labels until we met new // PH/PL
 var last_pos_div_lines = 0
 var last_neg_div_lines = 0
 var remove_last_pos_divs = false
 var remove_last_neg_divs = false
-if not na(pl)
+if pl
     remove_last_pos_divs := false
     last_pos_div_lines := 0
     last_pos_div_lines
-if not na(ph)
+if ph
     remove_last_neg_divs := false
     last_neg_div_lines := 0
     last_neg_div_lines
@@ -372,8 +391,7 @@ old_pos_divs_can_be_removed = true
 old_neg_divs_can_be_removed = true
 startpoint = dontconfirm ? 0 : 1  // used for don't confirm option
 
-// Updated loop: 0 to 8 (9 indicators)
-for x = 0 to 8 by 1
+for x = 0 to 12 by 1
     div_type = -1
     for y = 0 to 3 by 1
         if array.get(all_divergences, x * 4 + y) > 0  // any divergence?
@@ -448,12 +466,12 @@ if showindis != 'Don\'t Show' or shownum
     if divergence_text_top != ''
         if showlast
             delete_old_neg_div_labels()
-        array.push(neg_div_labels, label.new(x=bar_index - startpoint, y=math.max(high, high[1]), text=divergence_text_top, color=top_label_col, textcolor=neg_div_text_col, style=label.style_label_down))
+        array.push(neg_div_labels, label.new(x=bar_index, y=math.max(high, high[1]), text=divergence_text_top, color=top_label_col, textcolor=neg_div_text_col, style=label.style_label_down))
 
     if divergence_text_bottom != ''
         if showlast
             delete_old_pos_div_labels()
-        array.push(pos_div_labels, label.new(x=bar_index - startpoint, y=math.min(low, low[1]), text=divergence_text_bottom, color=bottom_label_col, textcolor=pos_div_text_col, style=label.style_label_up))
+        array.push(pos_div_labels, label.new(x=bar_index, y=math.min(low, low[1]), text=divergence_text_bottom, color=bottom_label_col, textcolor=pos_div_text_col, style=label.style_label_up))
 
 
 alertcondition(pos_reg_div_detected, title='Positive Regular Divergence Detected', message='Positive Regular Divergence Detected')
